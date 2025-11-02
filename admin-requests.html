@@ -189,6 +189,32 @@
                             ? req.approved_event_id
                             : "N/A";
 
+                    let specificsHtml = "";
+                    if (
+                        req.event_specifics &&
+                        req.event_specifics.code_battle
+                    ) {
+                        const cb = req.event_specifics.code_battle;
+                        const topics =
+                            cb.topics && cb.topics.length > 0
+                                ? cb.topics.join(", ")
+                                : "Any";
+                        const distribution = cb.distribution
+                            .map(
+                                (d) =>
+                                    `<li>${d.number_of_problems} &times; Difficulty ${d.difficulty} @ ${d.score} pts</li>`,
+                            )
+                            .join("");
+
+                        specificsHtml = `
+                            <hr>
+                            <h4>Code Battle Details</h4>
+                            <p><strong>Topics:</strong> ${topics}</p>
+                            <p><strong>Problem Distribution:</strong></p>
+                            <ul>${distribution}</ul>
+                        `;
+                    }
+
                     const detailsHtml = `
                         <div class="details-content">
                             <p><strong>Description:</strong> ${req.description}</p>
@@ -208,6 +234,7 @@
                                 <li>Guilds per Room: ${req.room_configuration.guilds_per_room}</li>
                                 <li>Room Naming Prefix: "${req.room_configuration.room_naming_prefix}"</li>
                             </ul>
+                            ${specificsHtml}
                         </div>
                     `;
 

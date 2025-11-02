@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/events"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/executor"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/request"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/response"
+	pb "github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/protos"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -33,12 +33,12 @@ type SubmissionRequest struct {
 }
 
 type SubmissionResponse struct {
-	Stdout        string           `json:"stdout"`
-	Stderr        string           `json:"stderr"`
-	Message       string           `json:"message"`
-	Success       bool             `json:"success"`
-	Error         executor.CodeErr `json:"error"`
-	ExecutionTime string           `json:"execution_time_ms"`
+	Stdout        string `json:"stdout"`
+	Stderr        string `json:"stderr"`
+	Message       string `json:"message"`
+	Success       bool   `json:"success"`
+	Error         string `json:"error"`
+	ExecutionTime string `json:"execution_time_ms"`
 }
 
 // SubmitSolutionHandler will compile and run test cases of a solution for a code problem
@@ -67,16 +67,9 @@ func (hr *HandlerRepo) SubmitSolutionHandler(w http.ResponseWriter, r *http.Requ
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultQueryTimeoutSecond)
 	defer cancel()
 
-	normalizedLang, found := executor.NormalizeLanguage(req.Language)
-	if !found {
-		hr.logger.Warn("programming language not found", "lang", req.Language)
-		hr.badRequest(w, r, ErrLanguageNotFound)
-		return
-	}
-
-	lang, err := hr.queries.GetLanguageByName(ctx, normalizedLang)
+	lang, err := hr.queries.GetLanguageByName(ctx, req.Language)
 	if err != nil {
-		hr.logger.Error("failed to get language", "lang", normalizedLang)
+		hr.logger.Error("failed to get language", "lang", req.Language)
 		return
 	}
 
@@ -97,22 +90,6 @@ func (hr *HandlerRepo) SubmitSolutionHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// combine problem's driver code with user's code
-	finalCode, err := hr.codeBuilder.Build(normalizedLang, problem.DriverCode, req.Code)
-	if err == executor.ErrParsed {
-		hr.logger.Warn("Wrong syntax")
-		hr.badRequest(w, r, ErrWrongSyntax)
-		return
-	}
-
-	if err != nil {
-		hr.logger.Error("failed to build code", "err", err)
-		hr.serverError(w, r, ErrInternalServer)
-		return
-	}
-
-	hr.logger.Info("Code built successfully", "final_code", finalCode)
-
 	s, err := hr.queries.CreateSubmission(r.Context(), store.CreateSubmissionParams{
 		UserID:        toPgtypeUUID(playerID),
 		LanguageID:    lang.ID,
@@ -120,8 +97,31 @@ func (hr *HandlerRepo) SubmitSolutionHandler(w http.ResponseWriter, r *http.Requ
 		CodeSubmitted: req.Code,
 		Status:        store.SubmissionStatusPending,
 	})
+	if err != nil {
+		hr.logger.Error("failed to create submission", "err", err)
+		hr.serverError(w, r, ErrInternalServer)
+		return
+	}
 
-	result := hr.worker.ExecuteJob(lang, finalCode, testCases)
+	// Convert test cases from store.TestCase to pb.TestCase
+	pbTestCases := convertTestCases(testCases)
+
+	// Send grpc request to executor service
+	result, err := hr.executorClient.ExecuteCode(r.Context(), &pb.ExecuteRequest{
+		Language:     lang.Name,
+		Code:         req.Code,
+		DriverCode:   problem.DriverCode,
+		CompileCmd:   lang.CompileCmd,
+		RunCmd:       lang.RunCmd,
+		TempFileDir:  lang.TempFileDir.String,
+		TempFileName: lang.TempFileName.String,
+		TestCases:    pbTestCases,
+	})
+	if err != nil {
+		hr.logger.Error("failed to execute code", "err", err)
+		hr.serverError(w, r, ErrInternalServer)
+		return
+	}
 
 	err = hr.updateSubmissionStatus(ctx, s.ID, result)
 	if err != nil {
@@ -137,8 +137,8 @@ func (hr *HandlerRepo) SubmitSolutionHandler(w http.ResponseWriter, r *http.Requ
 			Stderr:        result.Stderr,
 			Message:       result.Message,
 			Success:       result.Success,
-			Error:         result.Error,
-			ExecutionTime: result.ExecutionTime,
+			Error:         result.ErrorType,
+			ExecutionTime: result.ExecutionTimeMs,
 		},
 		Success: true,
 		Msg:     "solution submitted successfully.",
@@ -146,22 +146,34 @@ func (hr *HandlerRepo) SubmitSolutionHandler(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-func (hr *HandlerRepo) updateSubmissionStatus(ctx context.Context, submissionID pgtype.UUID, result executor.Result) error {
+// Helper function to convert store.TestCase to pb.TestCase
+func convertTestCases(storeTestCases []store.TestCase) []*pb.TestCase {
+	pbTestCases := make([]*pb.TestCase, len(storeTestCases))
+	for i, tc := range storeTestCases {
+		pbTestCases[i] = &pb.TestCase{
+			Input:          tc.Input,
+			ExpectedOutput: tc.ExpectedOutput,
+		}
+	}
+	return pbTestCases
+}
+
+func (hr *HandlerRepo) updateSubmissionStatus(ctx context.Context, submissionID pgtype.UUID, result *pb.ExecuteResponse) error {
 	var status store.SubmissionStatus
 
 	if result.Success {
 		status = store.SubmissionStatusAccepted
 	} else {
-		// 2. Use a switch on the error type for clarity.
-		switch result.Error {
-		case executor.RunTimeError:
+		// Use a switch on the error type from the ExecuteResponse
+		switch result.ErrorType {
+		case "RUNTIME_ERROR":
 			status = store.SubmissionStatusRuntimeError
-		case executor.CompileError:
+		case "COMPILE_ERROR":
 			status = store.SubmissionStatusCompilationError
-		case executor.FailTestCase:
+		case "WRONG_ANSWER":
 			status = store.SubmissionStatusWrongAnswer
 		default:
-			// 3. Add a default case to catch nil or unknown errors.
+			// Add a default case to catch nil or unknown errors.
 			// This prevents the zero-value bug.
 			status = store.SubmissionStatusRuntimeError // A safe default for unknown failures.
 		}
@@ -178,6 +190,7 @@ func (hr *HandlerRepo) updateSubmissionStatus(ctx context.Context, submissionID 
 	return nil
 }
 
+// SubmitSolutionInRoomHandler creates an event and pass it to the room's channel
 func (hr *HandlerRepo) SubmitSolutionInRoomHandler(w http.ResponseWriter, r *http.Request) {
 	// claims, ok := r.Context().Value("asd").(*jwt.UserClaims)
 	// if !ok {

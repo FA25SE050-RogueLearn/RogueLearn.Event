@@ -50,5 +50,9 @@ func (app *Application) routes() http.Handler {
 		// Auth-protected routes for problem details
 		r.Get("/{problem_id}/details", app.handlers.GetProblemDetails)
 	})
+
+	mux.Route("/tags", func(r chi.Router) {
+		r.Get("/", app.handlers.GetTagsHandler)
+	})
 	return mux
 }

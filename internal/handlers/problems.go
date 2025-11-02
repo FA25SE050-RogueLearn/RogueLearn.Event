@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"net/http"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/executor"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/response"
 	"github.com/go-chi/chi/v5"
@@ -115,16 +114,11 @@ func (hr *HandlerRepo) GetProblemDetails(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	normalizedLang, found := executor.NormalizeLanguage(r.URL.Query().Get("lang"))
-	if !found {
-		hr.logger.Warn("lang not found")
-		hr.notFound(w, r)
-		return
-	}
+	lang := r.URL.Query().Get("lang")
 
 	detail, err := hr.queries.GetCodeProblemLanguageDetailByLanguageName(r.Context(), store.GetCodeProblemLanguageDetailByLanguageNameParams{
 		CodeProblemID: toPgtypeUUID(problemID),
-		Name:          normalizedLang,
+		Name:          lang,
 	})
 
 	if err != nil {
@@ -141,6 +135,42 @@ func (hr *HandlerRepo) GetProblemDetails(w http.ResponseWriter, r *http.Request)
 	})
 	if err != nil {
 		hr.logger.Error("failed to parse json", "err", err)
+		hr.serverError(w, r, err)
+	}
+}
+
+type TagResponse struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
+func (hr *HandlerRepo) GetTagsHandler(w http.ResponseWriter, r *http.Request) {
+	params := store.GetTagsParams{
+		Limit:  100, // Assuming there won't be more than 100 tags for now
+		Offset: 0,
+	}
+
+	tags, err := hr.queries.GetTags(r.Context(), params)
+	if err != nil {
+		hr.serverError(w, r, err)
+		return
+	}
+
+	tagResponses := make([]TagResponse, len(tags))
+	for i, tag := range tags {
+		tagResponses[i] = TagResponse{
+			ID:   tag.ID.Bytes,
+			Name: tag.Name,
+		}
+	}
+
+	err = response.JSON(w, response.JSONResponseParameters{
+		Status:  http.StatusOK,
+		Data:    tagResponses,
+		Success: true,
+		Msg:     "Tags retrieved successfully",
+	})
+	if err != nil {
 		hr.serverError(w, r, err)
 	}
 }

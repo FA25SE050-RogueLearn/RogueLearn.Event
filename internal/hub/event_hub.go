@@ -3,16 +3,18 @@ package hub
 import (
 	"context"
 	"database/sql"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/executor"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/rabbitmq"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/events"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/executor"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
+	pb "github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/protos"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -28,17 +30,18 @@ const (
 
 // EventHub struct holds all the RoomHub (channel) of each room
 type EventHub struct {
-	worker        *executor.WorkerPool
 	logger        *slog.Logger
 	queries       *store.Queries
 	Rooms         map[uuid.UUID]*RoomHub // roomID -> roomManager
 	Mu            sync.RWMutex
 	leaderboardMu sync.Mutex // Protects leaderboard calculation
-	codeBuilder   executor.CodeBuilder
 
 	GuildUpdateChan  chan uuid.UUID
 	EventListeners   map[uuid.UUID]map[uuid.UUID]chan<- events.SseEvent // eventID -> map[listenerID] channel
 	EventListenersMu sync.RWMutex                                       // A dedicated mutex for the event
+
+	rabbitClient   *rabbitmq.RabbitMQClient
+	executorClient *executor.Client
 }
 
 type RoomHub struct {
@@ -46,26 +49,27 @@ type RoomHub struct {
 	EventID       uuid.UUID
 	Events        chan any                             // Events channel is what happened in the room
 	Listerners    map[uuid.UUID]chan<- events.SseEvent // Players connected to this RoomHub
-	codeBuilder   executor.CodeBuilder
-	worker        *executor.WorkerPool
 	logger        *slog.Logger
 	queries       *store.Queries
 	Mu            sync.RWMutex // Protects Listerners map
 	leaderboardMu sync.Mutex   // Protects leaderboard calculation
 
 	guildUpdateChan chan<- uuid.UUID
+
+	rabbitClient   *rabbitmq.RabbitMQClient
+	executorClient *executor.Client
 }
 
-func NewEventHub(queries *store.Queries, logger *slog.Logger, codeBuilder executor.CodeBuilder, worker *executor.WorkerPool) *EventHub {
+func NewEventHub(queries *store.Queries, logger *slog.Logger) *EventHub {
 	e := EventHub{
-		worker:          worker,
 		logger:          logger,
 		queries:         queries,
 		Rooms:           make(map[uuid.UUID]*RoomHub),
-		codeBuilder:     codeBuilder,
 		GuildUpdateChan: make(chan uuid.UUID, 100), // Buffered channel
 		EventListeners:  make(map[uuid.UUID]map[uuid.UUID]chan<- events.SseEvent),
 	}
+
+	go e.listenForAMQPEvents() // Start the central RabbitMQ listener
 
 	supabaseEventID, _ := uuid.Parse("e88e5761-e0fa-409d-baad-057edad1496a")
 	e.EventListeners[supabaseEventID] = make(map[uuid.UUID]chan<- events.SseEvent)
@@ -94,7 +98,7 @@ func NewEventHub(queries *store.Queries, logger *slog.Logger, codeBuilder execut
 	return &e
 }
 
-func newRoomHub(eventID, roomId uuid.UUID, queries *store.Queries, worker *executor.WorkerPool, logger *slog.Logger, codeBuilder executor.CodeBuilder, guildUpdateChan chan<- uuid.UUID) *RoomHub {
+func newRoomHub(eventID, roomId uuid.UUID, queries *store.Queries, logger *slog.Logger, guildUpdateChan chan<- uuid.UUID) *RoomHub {
 	return &RoomHub{
 		RoomID:          roomId,
 		EventID:         eventID, // Set the eventID
@@ -104,9 +108,68 @@ func newRoomHub(eventID, roomId uuid.UUID, queries *store.Queries, worker *execu
 		queries:         queries,
 		Mu:              sync.RWMutex{},
 		leaderboardMu:   sync.Mutex{},
-		worker:          worker,
-		codeBuilder:     codeBuilder,
 		guildUpdateChan: guildUpdateChan, // Set the notification channel
+	}
+}
+
+// listenForAMQPEvents is the central goroutine that receives all messages from RabbitMQ
+// and dispatches them to the correct local listeners.
+func (e *EventHub) listenForAMQPEvents() {
+	msgs, err := e.rabbitClient.Consume()
+	if err != nil {
+		e.logger.Error("Failed to start consuming from RabbitMQ", "error", err)
+		// Implement retry logic here if needed
+		return
+	}
+
+	e.logger.Info("Listening for messages from RabbitMQ fanout exchange")
+
+	for msg := range msgs {
+		e.logger.Info("Received message from RabbitMQ", "routing_key", msg.RoutingKey, "payload_size", len(msg.Body))
+
+		var sseEvent events.SseEvent
+		if err := json.Unmarshal(msg.Body, &sseEvent); err != nil {
+			e.logger.Error("Failed to unmarshal AMQP message", "error", err)
+			continue
+		}
+
+		// Use the routing key to determine where to dispatch the event
+		parts := strings.Split(msg.RoutingKey, ".")
+		if len(parts) != 2 {
+			continue
+		}
+		entityType, entityIDStr := parts[0], parts[1]
+		entityID, err := uuid.Parse(entityIDStr)
+		if err != nil {
+			e.logger.Error("Failed to parse entity ID from routing key", "error", err, "routing_key", msg.RoutingKey)
+			continue
+		}
+
+		switch entityType {
+		case "room":
+			if room := e.GetRoomById(entityID); room != nil {
+				room.dispatchEvent(sseEvent)
+			}
+		case "event":
+			e.dispatchEventToEvent(entityID, sseEvent)
+		}
+	}
+}
+
+// ... (GetRoomById and dispatchEventToEvent remain largely the same)
+
+// publishEvent is a helper to publish any SseEvent to RabbitMQ.
+func (r *RoomHub) publishEvent(ctx context.Context, routingKey string, sseEvent events.SseEvent) {
+	payload, err := json.Marshal(sseEvent)
+	if err != nil {
+		r.logger.Error("Failed to marshal event for publishing", "error", err, "routing_key", routingKey)
+		return
+	}
+
+	// TODO: Understand this better and maybe refactor
+	err = r.rabbitClient.Publish(ctx, rabbitmq.SseEventsExchange, routingKey, payload)
+	if err != nil {
+		r.logger.Error("Failed to publish event to RabbitMQ", "error", err, "routing_key", routingKey)
 	}
 }
 
@@ -117,7 +180,7 @@ func (h *EventHub) GetRoomById(roomID uuid.UUID) *RoomHub {
 }
 
 func (e *EventHub) CreateRoom(eventID, roomID uuid.UUID, queries *store.Queries) *RoomHub {
-	r := newRoomHub(eventID, roomID, queries, e.worker, e.logger, e.codeBuilder, e.GuildUpdateChan)
+	r := newRoomHub(eventID, roomID, queries, e.logger, e.GuildUpdateChan)
 	e.Mu.Lock()
 	e.Rooms[roomID] = r
 	e.Mu.Unlock()
@@ -181,7 +244,6 @@ func (e *EventHub) dispatchEventToEvent(eventID uuid.UUID, sseEvent events.SseEv
 
 // Start will start to listen and serve events to players connected to the room
 func (r *RoomHub) Start() {
-	r.logger.Info("check init", "code_builder", r.codeBuilder)
 	for event := range r.Events {
 		switch e := event.(type) {
 		case events.SolutionSubmitted:
@@ -300,13 +362,7 @@ func (r *RoomHub) processSolutionSubmitted(event events.SolutionSubmitted) error
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultQueryTimeoutSecond)
 	defer cancel()
 
-	normalizedLang, found := executor.NormalizeLanguage(event.Language)
-	if !found {
-		r.logger.Warn("lang not found")
-		return errors.New("language not found")
-	}
-
-	lang, err := r.queries.GetLanguageByName(ctx, normalizedLang)
+	lang, err := r.queries.GetLanguageByName(ctx, event.Language)
 	if err != nil {
 		r.logger.Error("error", "lang", event.Language)
 		return err
@@ -342,16 +398,20 @@ func (r *RoomHub) processSolutionSubmitted(event events.SolutionSubmitted) error
 		return err
 	}
 
-	// combine problem's driver code with user's code
-	finalCode, err := r.codeBuilder.Build(normalizedLang, problem.DriverCode, event.Code)
+	// TODO: Send grpc request to executor service
+	result, err := r.executorClient.ExecuteCode(ctx, &pb.ExecuteRequest{
+		Language:     lang.Name,
+		Code:         event.Code,
+		DriverCode:   problem.DriverCode,
+		CompileCmd:   lang.CompileCmd,
+		RunCmd:       lang.RunCmd,
+		TempFileDir:  lang.TempFileDir.String,
+		TempFileName: lang.TempFileName.String,
+		TestCases:    storeTestCasesToPbTestCases(testCases),
+	})
 	if err != nil {
-		r.logger.Error("failed to build code", "err", err)
 		return err
 	}
-
-	r.logger.Info("Code built successfully", "final_code", finalCode)
-
-	result := r.worker.ExecuteJob(lang, finalCode, testCases)
 
 	solutionResult := generateSolutionResult(event, result)
 	r.Events <- solutionResult
@@ -359,29 +419,39 @@ func (r *RoomHub) processSolutionSubmitted(event events.SolutionSubmitted) error
 	return nil
 }
 
-func generateSolutionResult(solutionSubmitted events.SolutionSubmitted, jobResult executor.Result) events.SolutionResult {
-	var solutionResult *events.SolutionResult = &events.SolutionResult{
+// generateSolutionResult creates a SolutionResult from the execution response
+func generateSolutionResult(solutionSubmitted events.SolutionSubmitted, result *pb.ExecuteResponse) events.SolutionResult {
+	solutionResult := events.SolutionResult{
 		SolutionSubmitted: solutionSubmitted,
-		Score:             50, //change later
+		Score:             50, // TODO: Calculate actual score based on test cases passed
 		Status:            events.Accepted,
 		Message:           "Solution is correct!",
 	}
 
-	switch jobResult.Error {
-	case executor.CompileError:
-		solutionResult.Message = fmt.Sprintf("compiled error: %v\n", jobResult.Message)
-		solutionResult.Status = events.CompilationError
+	// If execution was not successful, determine the error type and set appropriate status
+	if !result.Success {
+		solutionResult.Score = 0
 
-	case executor.RunTimeError:
-		solutionResult.Message = fmt.Sprintf("runtime error: %v\n", jobResult.Message)
-		solutionResult.Status = events.RuntimeError
+		switch result.ErrorType {
+		case "COMPILE_ERROR":
+			solutionResult.Message = fmt.Sprintf("Compilation error: %v", result.Message)
+			solutionResult.Status = events.CompilationError
 
-	case executor.FailTestCase:
-		solutionResult.Message = fmt.Sprintf("test case failed: %v\n", jobResult.Message)
-		solutionResult.Status = events.WrongAnswer
+		case "RUNTIME_ERROR":
+			solutionResult.Message = fmt.Sprintf("Runtime error: %v", result.Message)
+			solutionResult.Status = events.RuntimeError
+
+		case "WRONG_ANSWER":
+			solutionResult.Message = fmt.Sprintf("Wrong answer: %v", result.Message)
+			solutionResult.Status = events.WrongAnswer
+
+		default:
+			solutionResult.Message = fmt.Sprintf("Execution failed: %v", result.Message)
+			solutionResult.Status = events.RuntimeError
+		}
 	}
 
-	return *solutionResult
+	return solutionResult
 }
 
 // combineCodeWithTemplate combined the userCode and templateFunction at placeHolder
@@ -394,6 +464,8 @@ func (r *RoomHub) processSolutionResult(event events.SolutionResult) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
+	roomRoutingKey := fmt.Sprintf("room.%s", r.RoomID)
+
 	r.logger.Info("processing solution result...", "submission_id", event.SolutionSubmitted.SubmissionID)
 
 	if event.Status != events.Accepted {
@@ -403,18 +475,20 @@ func (r *RoomHub) processSolutionResult(event events.SolutionResult) error {
 			Data:      fmt.Sprintf("status:%v,message:%v", event.Status, event.Message),
 		}
 
-		_, err := r.queries.UpdateSubmissionStatus(ctx, store.UpdateSubmissionStatusParams{
-			ID:     toPgtypeUUID(event.SolutionSubmitted.SubmissionID),
-			Status: store.SubmissionStatusWrongAnswer,
-		})
+		r.publishEvent(ctx, roomRoutingKey, sseEvent)
 
-		if err != nil {
-			r.logger.Error("failed to update submission status to wrong", "error", err,
-				"submission_id", event.SolutionSubmitted.SubmissionID)
-			return err
-		}
+		// _, err := r.queries.UpdateSubmissionStatus(ctx, store.UpdateSubmissionStatusParams{
+		// 	ID:     toPgtypeUUID(event.SolutionSubmitted.SubmissionID),
+		// 	Status: store.SubmissionStatusWrongAnswer,
+		// })
 
-		go r.dispatchEventToPlayer(sseEvent, event.SolutionSubmitted.PlayerID)
+		// if err != nil {
+		// 	r.logger.Error("failed to update submission status to wrong", "error", err,
+		// 		"submission_id", event.SolutionSubmitted.SubmissionID)
+		// 	return err
+		// }
+
+		// go r.dispatchEventToPlayer(sseEvent, event.SolutionSubmitted.PlayerID)
 
 		return nil
 	}
@@ -431,51 +505,30 @@ func (r *RoomHub) processSolutionResult(event events.SolutionResult) error {
 		return err
 	}
 
-	select {
-	case r.guildUpdateChan <- r.EventID:
-		r.logger.Info("Sent guild leaderboard update notification", "event_id", r.EventID)
-	default:
-		r.logger.Warn("Guild update channel is full, notification dropped", "event_id", r.EventID)
-	}
-
 	// Recalculate leaderboard after score update
 	if err := r.calculateLeaderboard(ctx); err != nil {
 		r.logger.Error("failed to calculate leaderboard after solution result", "error", err)
 		// non-fatal, but should be monitored
 	}
 
-	correctSolution := events.SseEvent{
-		EventType: events.CORRECT_SOLUTION_SUBMITTED,
-		Data:      "",
-	}
-
-	// send event to the whole room
-	go r.dispatchEvent(correctSolution)
-
-	entries, err := r.getRoomLeaderboardEntries(ctx)
+	roomEntries, err := r.getRoomLeaderboardEntries(ctx)
 	if err != nil {
 		return err
 	}
 
-	leaderboardUpdated := events.SseEvent{
-		EventType: events.LEADERBOARD_UPDATED,
-		Data:      entries,
+	roomLeaderboardEvent := events.SseEvent{EventType: events.LEADERBOARD_UPDATED, Data: roomEntries}
+	r.publishEvent(ctx, roomRoutingKey, roomLeaderboardEvent)
+
+	guildEntries, err := r.queries.GetGuildLeaderboardByEvent(ctx, toPgtypeUUID(r.EventID))
+	if err == nil {
+		eventRoutingKey := fmt.Sprintf("event.%s", r.EventID)
+		guildLeaderboardEvent := events.SseEvent{EventType: events.GUILD_LEADERBOARD_UPDATED, Data: guildEntries}
+		r.publishEvent(ctx, eventRoutingKey, guildLeaderboardEvent)
+	} else {
+		r.logger.Error("failed to get guild leaderboard for event", "error", err, "event_id", r.EventID)
 	}
 
-	go r.dispatchEvent(leaderboardUpdated)
-
-	// mark the problem as solved
-	_, err = r.queries.UpdateSubmissionStatus(ctx, store.UpdateSubmissionStatusParams{
-		ID:     toPgtypeUUID(event.SolutionSubmitted.SubmissionID),
-		Status: store.SubmissionStatusAccepted,
-	})
-
-	if err != nil {
-		r.logger.Error("failed to update submission status to accepted", "error", err,
-			"submission_id", event.SolutionSubmitted.SubmissionID)
-		return err
-	}
-
+	// ... update submission status in DB
 	return nil
 }
 
@@ -584,34 +637,39 @@ func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 	}
 
 	// Recalculate leaderboard after a player joins
-	err := r.calculateLeaderboard(ctx)
-	if err != nil {
+	if err := r.calculateLeaderboard(ctx); err != nil {
 		r.logger.Error("failed to calculate leaderboard after player joined", "error", err)
-		// This is not fatal to the join operation, but should be monitored.
 	}
+
+	roomRoutingKey := fmt.Sprintf("room.%s", r.RoomID)
 
 	r.logger.Info("player joined", "event", event)
 
-	data := fmt.Sprintf("playerId:%d,roomId:%d\n\n", event.PlayerID, r.RoomID)
+	playerJoinedEvent := events.SseEvent{EventType: events.PLAYER_JOINED, Data: event}
+	r.publishEvent(ctx, roomRoutingKey, playerJoinedEvent)
 
-	playerJoined := events.SseEvent{
-		EventType: events.PLAYER_JOINED,
-		Data:      data,
-	}
+	// data := fmt.Sprintf("playerId:%d,roomId:%d\n\n", event.PlayerID, r.RoomID)
 
-	go r.dispatchEvent(playerJoined)
+	// playerJoined := events.SseEvent{
+	// 	EventType: events.PLAYER_JOINED,
+	// 	Data:      data,
+	// }
+
+	// go r.dispatchEvent(playerJoined)
 
 	entries, err := r.getRoomLeaderboardEntries(ctx)
 	if err != nil {
 		return err
 	}
 
-	leaderboardUpdated := events.SseEvent{
+	leaderboardUpdatedEvent := events.SseEvent{
 		EventType: events.LEADERBOARD_UPDATED,
 		Data:      entries,
 	}
 
-	go r.dispatchEvent(leaderboardUpdated)
+	r.publishEvent(ctx, roomRoutingKey, leaderboardUpdatedEvent)
+
+	// go r.dispatchEvent(leaderboardUpdated)
 
 	return nil
 }
@@ -688,4 +746,21 @@ func toPgtypeUUID(id uuid.UUID) pgtype.UUID {
 		Bytes: id,
 		Valid: true,
 	}
+}
+
+// storeTestCaseToPbTestCase converts a store.TestCase to pb.TestCase
+func storeTestCaseToPbTestCase(tc store.TestCase) *pb.TestCase {
+	return &pb.TestCase{
+		Input:          tc.Input,
+		ExpectedOutput: tc.ExpectedOutput,
+	}
+}
+
+// storeTestCasesToPbTestCases converts a slice of store.TestCase to a slice of pb.TestCase
+func storeTestCasesToPbTestCases(testCases []store.TestCase) []*pb.TestCase {
+	pbTestCases := make([]*pb.TestCase, len(testCases))
+	for i, tc := range testCases {
+		pbTestCases[i] = storeTestCaseToPbTestCase(tc)
+	}
+	return pbTestCases
 }

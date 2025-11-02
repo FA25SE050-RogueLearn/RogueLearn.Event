@@ -429,11 +429,13 @@ func (hr *HandlerRepo) ProcessEventRequestHandler(w http.ResponseWriter, r *http
 	}
 }
 
+// approve an event will send an event to the queue for creating rooms, questions...
 func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventRequest, adminID uuid.UUID) error {
 	var roomConfig RoomConfiguration
 	if err := json.Unmarshal(req.RoomConfiguration, &roomConfig); err != nil {
 		return fmt.Errorf("failed to unmarshal room configuration: %w", err)
 	}
+
 	var participationDetails ParticipationDetails
 	if err := json.Unmarshal(req.ParticipationDetails, &participationDetails); err != nil {
 		return fmt.Errorf("failed to unmarshal participation details: %w", err)

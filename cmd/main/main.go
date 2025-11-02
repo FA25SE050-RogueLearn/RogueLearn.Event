@@ -13,7 +13,8 @@ import (
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/protos"
 	"google.golang.org/grpc"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/executor"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/executor"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/rabbitmq"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/handlers"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/service"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
@@ -30,7 +31,8 @@ func main() {
 
 	cfg := &api.Config{
 		HttpPort: 8080,
-		GrpcPort: 8081}
+		GrpcPort: 8081,
+	}
 
 	// test area
 	connStr := env.GetString("SUPABASE_DB_CONNECTION_STRING", "")
@@ -50,20 +52,24 @@ func main() {
 	logger := slog.New(slogHandler)
 	slog.SetDefault(logger) // Set default for any library using slog's default logger
 
-	worker, err := executor.NewWorkerPool(logger, queries, &executor.WorkerPoolOptions{
-		MaxWorkers:       5,
-		MemoryLimitBytes: 512,
-		MaxJobCount:      3,
-		CpuNanoLimit:     1000,
-	})
+	rabbitMQURL := env.GetString("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
+	rabbitClient, err := rabbitmq.NewRabbitMQClient(rabbitMQURL, logger)
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("Could not connect to RabbitMQ: %v", err))
 	}
+	defer rabbitClient.Close()
 
-	pkgAnalyzer := executor.NewGoPackageAnalyzer()
-	codeBuilder := executor.NewCodeBuilder([]executor.PackageAnalyzer{pkgAnalyzer}, logger)
+	executorURL := env.GetString("EXECUTOR_URL", "")
+	if executorURL == "" {
+		panic("EXECUTOR_URL environment variable is not set")
+	}
+	executorClient, err := executor.NewClient(executorURL)
+	if err != nil {
+		panic(fmt.Sprintf("Could not connect to Executor: %v", err))
+	}
+	defer executorClient.Close()
 
-	handlerRepo := handlers.NewHandlerRepo(logger, db, queries, codeBuilder, worker)
+	handlerRepo := handlers.NewHandlerRepo(logger, db, queries, rabbitClient, executorClient)
 
 	app := api.NewApplication(cfg, logger, queries, handlerRepo)
 
@@ -72,6 +78,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
+
 	var opts []grpc.ServerOption
 	grpcServer := grpc.NewServer(opts...)
 	protos.RegisterCodeBattleServiceServer(grpcServer, service.NewCodeBattleServer(queries, logger))

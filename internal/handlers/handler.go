@@ -3,7 +3,8 @@ package handlers
 import (
 	"log/slog"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/executor"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/executor"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/rabbitmq"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/hub"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/env"
@@ -17,29 +18,29 @@ import (
 // This includes the application logger, services like the RoomManager,
 // and the centralized store for data access.
 type HandlerRepo struct {
-	worker      *executor.WorkerPool
-	eventHub    *hub.EventHub
-	logger      *slog.Logger
-	queries     *store.Queries
-	db          *pgxpool.Pool // Add db pool for transactions
-	jwtParser   *jwt.JWTParser
-	codeBuilder executor.CodeBuilder
+	eventHub       *hub.EventHub
+	logger         *slog.Logger
+	queries        *store.Queries
+	db             *pgxpool.Pool
+	jwtParser      *jwt.JWTParser
+	rabbitClient   *rabbitmq.RabbitMQClient
+	executorClient *executor.Client
 }
 
 // NewHandlerRepo creates a new HandlerRepo with the provided dependencies.
-func NewHandlerRepo(logger *slog.Logger, db *pgxpool.Pool, queries *store.Queries, codeBuilder executor.CodeBuilder, worker *executor.WorkerPool) *HandlerRepo {
+func NewHandlerRepo(logger *slog.Logger, db *pgxpool.Pool, queries *store.Queries, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client) *HandlerRepo {
 	secKey := env.GetString("JWT_SECRET_KEY", "")
 	if secKey == "" {
 		panic("JWT_SECRET_KEY env not found")
 	}
 	return &HandlerRepo{
-		worker:      worker,
-		logger:      logger,
-		db:          db,
-		queries:     queries,
-		jwtParser:   jwt.NewJWTParser(secKey, logger),
-		eventHub:    hub.NewEventHub(queries, logger, codeBuilder, worker),
-		codeBuilder: codeBuilder,
+		logger:         logger,
+		db:             db,
+		queries:        queries,
+		jwtParser:      jwt.NewJWTParser(secKey, logger),
+		eventHub:       hub.NewEventHub(queries, logger),
+		rabbitClient:   rabbitClient,
+		executorClient: executorClient,
 	}
 }
 
