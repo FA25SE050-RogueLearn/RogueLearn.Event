@@ -92,6 +92,55 @@
             .details-content p {
                 margin: 5px 0;
             }
+            .info-badge {
+                display: inline-block;
+                padding: 4px 8px;
+                border-radius: 4px;
+                font-size: 12px;
+                margin-left: 8px;
+            }
+            .badge-delayed {
+                background-color: #fff3cd;
+                color: #856404;
+                border: 1px solid #ffc107;
+            }
+            .badge-immediate {
+                background-color: #f8d7da;
+                color: #721c24;
+                border: 1px solid #dc3545;
+            }
+            .badge-active {
+                background-color: #d4edda;
+                color: #155724;
+                border: 1px solid #28a745;
+            }
+            .approval-note {
+                background-color: #d1ecf1;
+                border: 1px solid #bee5eb;
+                border-radius: 5px;
+                padding: 10px;
+                margin: 10px 0;
+                font-size: 13px;
+                color: #0c5460;
+            }
+            .loading-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0,0,0,0.5);
+                display: none;
+                justify-content: center;
+                align-items: center;
+                z-index: 1000;
+            }
+            .loading-spinner {
+                background: white;
+                padding: 20px;
+                border-radius: 8px;
+                text-align: center;
+            }
         </style>
     </head>
     <body>
@@ -111,6 +160,12 @@
 
             <div id="requests-container">
                 <p>Loading requests...</p>
+            </div>
+        </div>
+
+        <div class="loading-overlay" id="loading-overlay">
+            <div class="loading-spinner">
+                <p>Processing request...</p>
             </div>
         </div>
 
@@ -173,11 +228,26 @@
                     tr.dataset.requestId = req.id;
                     const statusClass = `status-${req.status.toLowerCase()}`;
 
+                    // Calculate timing information
+                    const now = new Date();
+                    const startDate = new Date(req.proposed_start_date);
+                    const hoursUntil = Math.round((startDate - now) / (1000 * 60 * 60));
+                    let timingBadge = "";
+
+                    if (req.status === "pending") {
+                        if (hoursUntil < 24) {
+                            timingBadge = `<span class="info-badge badge-immediate">Starts in ${hoursUntil}h</span>`;
+                        } else {
+                            const daysUntil = Math.round(hoursUntil / 24);
+                            timingBadge = `<span class="info-badge badge-delayed">Starts in ${daysUntil}d</span>`;
+                        }
+                    }
+
                     let actionsHtml = "N/A";
                     if (req.status === "pending") {
                         actionsHtml = `
                         <div class="actions">
-                            <button class="btn-approve" data-id="${req.id}">Approve</button>
+                            <button class="btn-approve" data-id="${req.id}" data-start="${req.proposed_start_date}">Approve</button>
                             <button class="btn-decline" data-id="${req.id}">Decline</button>
                         </div>
                     `;
@@ -215,10 +285,35 @@
                         `;
                     }
 
+                    // Build approval workflow explanation
+                    let workflowNote = "";
+                    if (req.status === "pending") {
+                        workflowNote = `
+                            <div class="approval-note">
+                                <strong>Approval Workflow:</strong><br>
+                                When you approve this request:
+                                <ol style="margin: 5px 0; padding-left: 20px;">
+                                    <li>A delayed message will be sent to RabbitMQ with delay until: ${new Date(req.proposed_start_date).toLocaleString()}</li>
+                                    <li>At the start time, the system will:
+                                        <ul>
+                                            <li>Create the event in the database</li>
+                                            <li>Create ${req.room_configuration.number_of_rooms} room(s)</li>
+                                            <li>Register the requester guild</li>
+                                            <li>Initialize room hubs for real-time events</li>
+                                        </ul>
+                                    </li>
+                                    <li>The event will automatically end at: ${new Date(req.proposed_end_date).toLocaleString()}</li>
+                                </ol>
+                            </div>
+                        `;
+                    }
+
                     const detailsHtml = `
                         <div class="details-content">
+                            ${workflowNote}
                             <p><strong>Description:</strong> ${req.description}</p>
                             <p><strong>Proposed End Date:</strong> ${new Date(req.proposed_end_date).toLocaleString()}</p>
+                            <p><strong>Duration:</strong> ${Math.round((new Date(req.proposed_end_date) - new Date(req.proposed_start_date)) / (1000 * 60 * 60))} hours</p>
                             <p><strong>Notes for Admin:</strong> ${req.notes || "N/A"}</p>
                             <p><strong>Rejection Reason:</strong> ${req.rejection_reason || "N/A"}</p>
                             <p><strong>Approved Event ID:</strong> ${approvedEventIdDisplay}</p>
@@ -241,7 +336,7 @@
                     tr.innerHTML = `
                         <td>${req.title}</td>
                         <td>${req.requester_guild_id}</td>
-                        <td>${new Date(req.proposed_start_date).toLocaleString()}</td>
+                        <td>${new Date(req.proposed_start_date).toLocaleString()}${timingBadge}</td>
                         <td><span class="${statusClass}">${req.status}</span></td>
                         <td>${actionsHtml}</td>
                         <td><button class="btn-details" data-details-for="${req.id}">View</button></td>
@@ -260,12 +355,15 @@
                 container.appendChild(table);
             }
 
-            async function processRequest(requestId, action, reason = "") {
+            async function processRequest(requestId, action, reason = "", startDate = null) {
                 const url = `${API_BASE_URL}/admin/event-requests/${requestId}/process`;
                 const payload = { action };
                 if (action === "decline") {
                     payload.rejection_reason = reason;
                 }
+
+                // Show loading overlay
+                document.getElementById("loading-overlay").style.display = "flex";
 
                 try {
                     const response = await fetch(url, {
@@ -274,8 +372,17 @@
                         body: JSON.stringify(payload),
                     });
                     const result = await response.json();
+
+                    // Hide loading overlay
+                    document.getElementById("loading-overlay").style.display = "none";
+
                     if (response.ok && result.success) {
-                        alert(`Request successfully ${action}ed.`);
+                        if (action === "approve" && startDate) {
+                            const hoursUntil = Math.round((new Date(startDate) - new Date()) / (1000 * 60 * 60));
+                            alert(`Request successfully approved!\n\nThe event has been scheduled to start in approximately ${hoursUntil} hours.\nA delayed message has been sent to RabbitMQ, and the event will be automatically created at the scheduled time.`);
+                        } else {
+                            alert(`Request successfully ${action}ed.`);
+                        }
                         fetchRequests(
                             document.getElementById("status-filter").value,
                         ); // Refresh list
@@ -286,6 +393,7 @@
                     }
                 } catch (error) {
                     console.error("Error processing request:", error);
+                    document.getElementById("loading-overlay").style.display = "none";
                     alert("A client-side error occurred.");
                 }
             }
@@ -324,12 +432,12 @@
                         if (!requestId) return;
 
                         if (target.classList.contains("btn-approve")) {
-                            if (
-                                confirm(
-                                    "Are you sure you want to approve this event?",
-                                )
-                            ) {
-                                processRequest(requestId, "approve");
+                            const startDate = target.dataset.start;
+                            const hoursUntil = Math.round((new Date(startDate) - new Date()) / (1000 * 60 * 60));
+                            const confirmMessage = `Are you sure you want to approve this event?\n\nThis will schedule the event to start in approximately ${hoursUntil} hours.\nThe event creation will be delayed until: ${new Date(startDate).toLocaleString()}`;
+
+                            if (confirm(confirmMessage)) {
+                                processRequest(requestId, "approve", "", startDate);
                             }
                         } else if (target.classList.contains("btn-decline")) {
                             const reason = prompt(
