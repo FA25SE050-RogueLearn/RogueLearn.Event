@@ -28,6 +28,23 @@ func (q *Queries) AddRoomPlayerScore(ctx context.Context, arg AddRoomPlayerScore
 	return err
 }
 
+const assignGuildToRoom = `-- name: AssignGuildToRoom :exec
+UPDATE event_guild_participants
+SET room_id = $3
+WHERE event_id = $1 AND guild_id = $2
+`
+
+type AssignGuildToRoomParams struct {
+	EventID pgtype.UUID
+	GuildID pgtype.UUID
+	RoomID  pgtype.UUID
+}
+
+func (q *Queries) AssignGuildToRoom(ctx context.Context, arg AssignGuildToRoomParams) error {
+	_, err := q.db.Exec(ctx, assignGuildToRoom, arg.EventID, arg.GuildID, arg.RoomID)
+	return err
+}
+
 const calculateGuildLeaderboard = `-- name: CalculateGuildLeaderboard :exec
 WITH latest_snapshot_time AS (
   SELECT MAX(gle1.snapshot_date) as snapshot_time
@@ -1007,6 +1024,57 @@ func (q *Queries) GetCodeProblems(ctx context.Context, arg GetCodeProblemsParams
 	return items, nil
 }
 
+const getCodeProblemsByCriteria = `-- name: GetCodeProblemsByCriteria :many
+SELECT DISTINCT cp.id, cp.title, cp.problem_statement, cp.difficulty, cp.created_at
+FROM code_problems cp
+LEFT JOIN code_problem_tags cpt ON cp.id = cpt.code_problem_id
+LEFT JOIN tags t ON cpt.tag_id = t.id
+WHERE
+  ($1::int IS NULL OR cp.difficulty = $1::int)
+  AND ($2::text[] IS NULL OR t.name = ANY($2::text[]))
+ORDER BY cp.created_at DESC
+LIMIT $4
+OFFSET $3
+`
+
+type GetCodeProblemsByCriteriaParams struct {
+	Difficulty  pgtype.Int4
+	TagNames    []string
+	OffsetCount int32
+	LimitCount  int32
+}
+
+func (q *Queries) GetCodeProblemsByCriteria(ctx context.Context, arg GetCodeProblemsByCriteriaParams) ([]CodeProblem, error) {
+	rows, err := q.db.Query(ctx, getCodeProblemsByCriteria,
+		arg.Difficulty,
+		arg.TagNames,
+		arg.OffsetCount,
+		arg.LimitCount,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CodeProblem
+	for rows.Next() {
+		var i CodeProblem
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.ProblemStatement,
+			&i.Difficulty,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getCodeProblemsByDifficulty = `-- name: GetCodeProblemsByDifficulty :many
 SELECT id, title, problem_statement, difficulty, created_at FROM code_problems
 WHERE difficulty = $1
@@ -1221,6 +1289,37 @@ ORDER BY joined_at ASC
 
 func (q *Queries) GetEventGuildParticipants(ctx context.Context, eventID pgtype.UUID) ([]EventGuildParticipant, error) {
 	rows, err := q.db.Query(ctx, getEventGuildParticipants, eventID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EventGuildParticipant
+	for rows.Next() {
+		var i EventGuildParticipant
+		if err := rows.Scan(
+			&i.EventID,
+			&i.GuildID,
+			&i.JoinedAt,
+			&i.RoomID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getEventParticipants = `-- name: GetEventParticipants :many
+SELECT event_id, guild_id, joined_at, room_id FROM event_guild_participants
+WHERE event_id = $1
+ORDER BY joined_at ASC
+`
+
+func (q *Queries) GetEventParticipants(ctx context.Context, eventID pgtype.UUID) ([]EventGuildParticipant, error) {
+	rows, err := q.db.Query(ctx, getEventParticipants, eventID)
 	if err != nil {
 		return nil, err
 	}

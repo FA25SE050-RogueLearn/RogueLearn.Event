@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	DefaultQueryTimeoutSecond = 10 * time.Second
+	DefaultQueryTimeoutSecond = 15 * time.Second
 )
 
 var (
@@ -69,7 +69,9 @@ func (hr *HandlerRepo) SubmitSolutionHandler(w http.ResponseWriter, r *http.Requ
 
 	lang, err := hr.queries.GetLanguageByName(ctx, req.Language)
 	if err != nil {
-		hr.logger.Error("failed to get language", "lang", req.Language)
+		hr.logger.Error("failed to get language",
+			"lang", req.Language,
+			"err", err)
 		return
 	}
 
@@ -107,7 +109,7 @@ func (hr *HandlerRepo) SubmitSolutionHandler(w http.ResponseWriter, r *http.Requ
 	pbTestCases := convertTestCases(testCases)
 
 	// Send grpc request to executor service
-	result, err := hr.executorClient.ExecuteCode(r.Context(), &pb.ExecuteRequest{
+	request := pb.ExecuteRequest{
 		Language:     lang.Name,
 		Code:         req.Code,
 		DriverCode:   problem.DriverCode,
@@ -116,7 +118,11 @@ func (hr *HandlerRepo) SubmitSolutionHandler(w http.ResponseWriter, r *http.Requ
 		TempFileDir:  lang.TempFileDir.String,
 		TempFileName: lang.TempFileName.String,
 		TestCases:    pbTestCases,
-	})
+	}
+
+	hr.logger.Info("Sending execution request...", "request", request)
+
+	result, err := hr.executorClient.ExecuteCode(r.Context(), &request)
 	if err != nil {
 		hr.logger.Error("failed to execute code", "err", err)
 		hr.serverError(w, r, ErrInternalServer)

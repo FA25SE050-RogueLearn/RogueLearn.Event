@@ -311,6 +311,7 @@ type EventRequestResponse struct {
 	ProposedEndDate      time.Time            `json:"proposed_end_date"`
 	ParticipationDetails ParticipationDetails `json:"participation_details"`
 	RoomConfiguration    RoomConfiguration    `json:"room_configuration"`
+	EventSpecifics       *EventSpecifics      `json:"event_specifics,omitempty"`
 	RejectionReason      string               `json:"rejection_reason"`
 	ApprovedEventID      uuid.UUID            `json:"approved_event_id"`
 	Notes                string               `json:"notes"`
@@ -429,7 +430,7 @@ func (hr *HandlerRepo) ProcessEventRequestHandler(w http.ResponseWriter, r *http
 	}
 }
 
-// approve an event will send an event to the queue for creating rooms, questions...
+// approve an event will create the event and schedule delayed processing for room creation and guild assignment
 func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventRequest, adminID uuid.UUID) error {
 	var roomConfig RoomConfiguration
 	if err := json.Unmarshal(req.RoomConfiguration, &roomConfig); err != nil {
@@ -467,7 +468,7 @@ func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventR
 		return fmt.Errorf("failed to create event: %w", err)
 	}
 
-	// Create rooms for the event
+	// Create rooms for the event (rooms are created now, but guilds will be assigned later)
 	for i := 0; i < int(roomConfig.NumberOfRooms); i++ {
 		roomName := fmt.Sprintf("%s %d", roomConfig.RoomNamingPrefix, i+1)
 		_, err := qtx.CreateRoom(ctx, store.CreateRoomParams{
@@ -484,7 +485,7 @@ func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventR
 	_, err = qtx.CreateEventGuildParticipant(ctx, store.CreateEventGuildParticipantParams{
 		EventID: event.ID,
 		GuildID: req.RequesterGuildID,
-		RoomID:  pgtype.UUID{Valid: false}, // Room assignment is a separate logic
+		RoomID:  pgtype.UUID{Valid: false}, // Room assignment happens at event start time
 	})
 	if err != nil {
 		return fmt.Errorf("failed to add requester guild to event: %w", err)
@@ -502,7 +503,28 @@ func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventR
 		return fmt.Errorf("failed to update event request status: %w", err)
 	}
 
-	return tx.Commit(ctx)
+	// Commit the transaction
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit event approval: %w", err)
+	}
+
+	// Schedule delayed processing for room assignments and event initialization
+	// This happens at the proposed start time
+	if hr.scheduler != nil {
+		err = hr.scheduler.ScheduleEventCreation(ctx, req.ID.Bytes, req.ProposedStartDate.Time)
+		if err != nil {
+			hr.logger.Error("failed to schedule event processing",
+				"event_request_id", req.ID.Bytes,
+				"error", err)
+			// Don't fail the approval if scheduling fails - log it for manual intervention
+			return fmt.Errorf("event approved but failed to schedule processing: %w", err)
+		}
+		hr.logger.Info("scheduled event processing",
+			"event_id", event.ID.Bytes,
+			"scheduled_for", req.ProposedStartDate.Time)
+	}
+
+	return nil
 }
 
 func (hr *HandlerRepo) declineEventRequest(ctx context.Context, req store.EventRequest, adminID uuid.UUID, reason string) error {
@@ -533,6 +555,15 @@ func toEventRequestResponse(req store.EventRequest) (EventRequestResponse, error
 		}
 	}
 
+	var eventSpecifics *EventSpecifics
+	if len(req.EventSpecifics) > 0 {
+		eventSpecifics = &EventSpecifics{}
+		if err := json.Unmarshal(req.EventSpecifics, eventSpecifics); err != nil {
+			// Log error but continue - event specifics are optional
+			eventSpecifics = nil
+		}
+	}
+
 	return EventRequestResponse{
 		ID:                   req.ID.Bytes,
 		Status:               string(req.Status),
@@ -542,6 +573,7 @@ func toEventRequestResponse(req store.EventRequest) (EventRequestResponse, error
 		ProposedEndDate:      req.ProposedEndDate.Time,
 		ParticipationDetails: participation,
 		RoomConfiguration:    roomConfig,
+		EventSpecifics:       eventSpecifics,
 		ApprovedEventID:      req.ApprovedEventID.Bytes,
 		RejectionReason:      req.RejectionReason.String,
 		RequesterGuildID:     req.RequesterGuildID.Bytes,

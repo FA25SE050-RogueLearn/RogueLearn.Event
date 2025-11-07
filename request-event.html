@@ -95,6 +95,38 @@
                 color: #d9534f;
                 font-weight: bold;
             }
+            .status-scheduled {
+                color: #17a2b8;
+                font-weight: bold;
+            }
+            .info-badge {
+                display: inline-block;
+                padding: 4px 8px;
+                border-radius: 4px;
+                font-size: 12px;
+                margin-left: 8px;
+            }
+            .badge-delayed {
+                background-color: #fff3cd;
+                color: #856404;
+                border: 1px solid #ffc107;
+            }
+            .badge-active {
+                background-color: #d4edda;
+                color: #155724;
+                border: 1px solid #28a745;
+            }
+            .validation-error {
+                color: #dc3545;
+                font-size: 12px;
+                margin-top: 3px;
+                display: none;
+            }
+            .form-group.error input,
+            .form-group.error textarea,
+            .form-group.error select {
+                border-color: #dc3545;
+            }
             .requests-list .btn-details {
                 background-color: #6c757d;
                 color: white;
@@ -197,6 +229,8 @@
                         name="start_date"
                         required
                     />
+                    <div class="validation-error" id="start-date-error"></div>
+                    <small style="color: #6c757d;">Event will be scheduled to start at this time after approval</small>
                 </div>
                 <div class="form-group">
                     <label for="end-date">Proposed End Date:</label>
@@ -206,6 +240,8 @@
                         name="end_date"
                         required
                     />
+                    <div class="validation-error" id="end-date-error"></div>
+                    <small style="color: #6c757d;">Event will automatically end at this time</small>
                 </div>
                 <div class="form-group">
                     <label for="num-rooms">Number of Rooms:</label>
@@ -304,8 +340,7 @@
         <script>
             const API_BASE_URL = "http://localhost:8080";
             let playerID = null;
-            // This is a placeholder. In a real app, the guild ID would be associated with the logged-in user.
-            const guildID = "11111111-1111-1111-1111-111111111111";
+            let guildID = null; // Will be loaded from localStorage or JWT
 
             async function fetchTags() {
                 const container = document.getElementById("topics-container");
@@ -420,6 +455,23 @@
                                     ? req.approved_event_id
                                     : "N/A";
 
+                            // Calculate event timing status
+                            const now = new Date();
+                            const startDate = new Date(req.proposed_start_date);
+                            const endDate = new Date(req.proposed_end_date);
+                            let timingBadge = "";
+
+                            if (req.status === "approved") {
+                                if (now < startDate) {
+                                    const hoursUntil = Math.round((startDate - now) / (1000 * 60 * 60));
+                                    timingBadge = `<span class="info-badge badge-delayed">Scheduled in ${hoursUntil}h</span>`;
+                                } else if (now >= startDate && now <= endDate) {
+                                    timingBadge = `<span class="info-badge badge-active">Active Now</span>`;
+                                } else {
+                                    timingBadge = `<span class="info-badge" style="background-color: #e9ecef; color: #495057;">Ended</span>`;
+                                }
+                            }
+
                             let specificsHtml = "";
                             if (
                                 req.event_specifics &&
@@ -472,7 +524,7 @@
                             tr.innerHTML = `
                                 <td>${req.title}</td>
                                 <td>${new Date(req.proposed_start_date).toLocaleString()}</td>
-                                <td><span class="${statusClass}">${req.status}</span></td>
+                                <td><span class="${statusClass}">${req.status}</span>${timingBadge}</td>
                                 <td><button class="btn-details" data-details-for="${req.id}">View</button></td>
                             `;
 
@@ -499,7 +551,10 @@
 
             document.addEventListener("DOMContentLoaded", () => {
                 playerID = localStorage.getItem("codebattle_player_id");
-                if (!playerID) {
+                guildID = localStorage.getItem("codebattle_guild_id");
+
+                if (!playerID || !guildID) {
+                    alert("Please login and select a guild first");
                     window.location.href = "/login.html";
                     return;
                 }
@@ -537,9 +592,59 @@
                         }
                     });
 
+                // Real-time validation
+                document.getElementById("start-date").addEventListener("change", validateDates);
+                document.getElementById("end-date").addEventListener("change", validateDates);
+
+                function validateDates() {
+                    const startDate = new Date(document.getElementById("start-date").value);
+                    const endDate = new Date(document.getElementById("end-date").value);
+                    const now = new Date();
+
+                    let hasError = false;
+
+                    // Clear previous errors
+                    document.querySelectorAll(".validation-error").forEach(el => el.style.display = "none");
+                    document.querySelectorAll(".form-group").forEach(el => el.classList.remove("error"));
+
+                    if (startDate < now) {
+                        showError("start-date", "Start date must be in the future");
+                        hasError = true;
+                    }
+
+                    if (endDate <= startDate) {
+                        showError("end-date", "End date must be after start date");
+                        hasError = true;
+                    }
+
+                    const duration = (endDate - startDate) / (1000 * 60 * 60); // hours
+                    if (duration < 1) {
+                        showError("end-date", "Event must be at least 1 hour long");
+                        hasError = true;
+                    }
+
+                    return !hasError;
+                }
+
+                function showError(fieldId, message) {
+                    const field = document.getElementById(fieldId);
+                    const error = document.getElementById(`${fieldId}-error`);
+                    field.closest(".form-group").classList.add("error");
+                    if (error) {
+                        error.textContent = message;
+                        error.style.display = "block";
+                    }
+                }
+
                 const form = document.getElementById("request-event-form");
                 form.addEventListener("submit", async (e) => {
                     e.preventDefault();
+
+                    // Validate before submission
+                    if (!validateDates()) {
+                        return;
+                    }
+
                     const resultContainer =
                         document.getElementById("request-result");
                     resultContainer.innerHTML = `<div style="color: blue;">Submitting request...</div>`;
@@ -623,8 +728,20 @@
                         );
                         const result = await response.json();
                         if (response.ok && result.success) {
-                            resultContainer.innerHTML = `<div style="color: green;"><strong>Success!</strong> Your event request has been submitted for approval.</div>`;
+                            const startDate = new Date(formData.get("start_date"));
+                            const hoursUntil = Math.round((startDate - new Date()) / (1000 * 60 * 60));
+                            resultContainer.innerHTML = `
+                                <div style="color: green; padding: 15px; border: 1px solid #28a745; border-radius: 5px; background-color: #d4edda;">
+                                    <strong>Success!</strong> Your event request has been submitted for approval.
+                                    <br><small>Once approved, the event will be automatically scheduled to start in approximately ${hoursUntil} hours.</small>
+                                </div>
+                            `;
                             form.reset();
+                            // Re-add default distribution rows after reset
+                            setTimeout(() => {
+                                addDistributionRow(2, 1, 10);
+                                addDistributionRow(2, 2, 25);
+                            }, 100);
                             fetchMyRequests(); // Refresh the list
                         } else {
                             resultContainer.innerHTML = `<div style="color: red;"><strong>Error:</strong> ${result.error_message || "An unknown error occurred."}</div>`;

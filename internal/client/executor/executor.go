@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"strings"
 
 	pb "github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/protos"
 	"google.golang.org/grpc"
@@ -14,6 +15,10 @@ type Client struct {
 }
 
 func NewClient(addr string) (*Client, error) {
+	// Strip http:// or https:// prefix if present, as gRPC doesn't use them
+	addr = strings.TrimPrefix(addr, "http://")
+	addr = strings.TrimPrefix(addr, "https://")
+
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err

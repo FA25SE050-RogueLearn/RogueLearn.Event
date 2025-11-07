@@ -17,7 +17,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING *;
 
 -- name: GetEventByID :one
--- SELECT * FROM events WHERE id = $1;
+SELECT * FROM events WHERE id = $1;
 
 -- name: GetEvents :many
 SELECT * FROM events
@@ -131,6 +131,18 @@ WHERE difficulty = $1
 ORDER BY created_at DESC
 LIMIT $2
 OFFSET $3;
+
+-- name: GetCodeProblemsByCriteria :many
+SELECT DISTINCT cp.*
+FROM code_problems cp
+LEFT JOIN code_problem_tags cpt ON cp.id = cpt.code_problem_id
+LEFT JOIN tags t ON cpt.tag_id = t.id
+WHERE
+  (sqlc.narg(difficulty)::int IS NULL OR cp.difficulty = sqlc.narg(difficulty)::int)
+  AND (sqlc.narg(tag_names)::text[] IS NULL OR t.name = ANY(sqlc.narg(tag_names)::text[]))
+ORDER BY cp.created_at DESC
+LIMIT sqlc.arg(limit_count)
+OFFSET sqlc.arg(offset_count);
 
 -- name: UpdateCodeProblem :one
 UPDATE code_problems
@@ -353,6 +365,16 @@ WHERE event_id = $1 AND guild_id = $2;
 SELECT * FROM event_guild_participants
 WHERE event_id = $1
 ORDER BY joined_at ASC;
+
+-- name: GetEventParticipants :many
+SELECT * FROM event_guild_participants
+WHERE event_id = $1
+ORDER BY joined_at ASC;
+
+-- name: AssignGuildToRoom :exec
+UPDATE event_guild_participants
+SET room_id = $3
+WHERE event_id = $1 AND guild_id = $2;
 
 -- name: GetGuildParticipantsByGuild :many
 SELECT * FROM event_guild_participants

@@ -6,6 +6,7 @@ import (
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/executor"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/rabbitmq"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/hub"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/scheduler"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/env"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/jwt"
@@ -25,10 +26,11 @@ type HandlerRepo struct {
 	jwtParser      *jwt.JWTParser
 	rabbitClient   *rabbitmq.RabbitMQClient
 	executorClient *executor.Client
+	scheduler      *scheduler.EventScheduler
 }
 
 // NewHandlerRepo creates a new HandlerRepo with the provided dependencies.
-func NewHandlerRepo(logger *slog.Logger, db *pgxpool.Pool, queries *store.Queries, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client) *HandlerRepo {
+func NewHandlerRepo(logger *slog.Logger, db *pgxpool.Pool, queries *store.Queries, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client, eventScheduler *scheduler.EventScheduler) *HandlerRepo {
 	secKey := env.GetString("JWT_SECRET_KEY", "")
 	if secKey == "" {
 		panic("JWT_SECRET_KEY env not found")
@@ -38,9 +40,10 @@ func NewHandlerRepo(logger *slog.Logger, db *pgxpool.Pool, queries *store.Querie
 		db:             db,
 		queries:        queries,
 		jwtParser:      jwt.NewJWTParser(secKey, logger),
-		eventHub:       hub.NewEventHub(queries, logger),
+		eventHub:       hub.NewEventHub(queries, logger, rabbitClient, executorClient),
 		rabbitClient:   rabbitClient,
 		executorClient: executorClient,
+		scheduler:      eventScheduler,
 	}
 }
 

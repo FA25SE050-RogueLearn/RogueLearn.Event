@@ -54,5 +54,9 @@ func (app *Application) routes() http.Handler {
 	mux.Route("/tags", func(r chi.Router) {
 		r.Get("/", app.handlers.GetTagsHandler)
 	})
+
+	mux.Route("/health", func(r chi.Router) {
+		r.Get("/", app.handlers.HealthcheckHandler)
+	})
 	return mux
 }

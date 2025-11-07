@@ -60,13 +60,15 @@ type RoomHub struct {
 	executorClient *executor.Client
 }
 
-func NewEventHub(queries *store.Queries, logger *slog.Logger) *EventHub {
+func NewEventHub(queries *store.Queries, logger *slog.Logger, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client) *EventHub {
 	e := EventHub{
 		logger:          logger,
 		queries:         queries,
 		Rooms:           make(map[uuid.UUID]*RoomHub),
 		GuildUpdateChan: make(chan uuid.UUID, 100), // Buffered channel
 		EventListeners:  make(map[uuid.UUID]map[uuid.UUID]chan<- events.SseEvent),
+		rabbitClient:    rabbitClient,
+		executorClient:  executorClient,
 	}
 
 	go e.listenForAMQPEvents() // Start the central RabbitMQ listener
@@ -98,7 +100,7 @@ func NewEventHub(queries *store.Queries, logger *slog.Logger) *EventHub {
 	return &e
 }
 
-func newRoomHub(eventID, roomId uuid.UUID, queries *store.Queries, logger *slog.Logger, guildUpdateChan chan<- uuid.UUID) *RoomHub {
+func newRoomHub(eventID, roomId uuid.UUID, queries *store.Queries, logger *slog.Logger, guildUpdateChan chan<- uuid.UUID, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client) *RoomHub {
 	return &RoomHub{
 		RoomID:          roomId,
 		EventID:         eventID, // Set the eventID
@@ -109,6 +111,8 @@ func newRoomHub(eventID, roomId uuid.UUID, queries *store.Queries, logger *slog.
 		Mu:              sync.RWMutex{},
 		leaderboardMu:   sync.Mutex{},
 		guildUpdateChan: guildUpdateChan, // Set the notification channel
+		rabbitClient:    rabbitClient,
+		executorClient:  executorClient,
 	}
 }
 
@@ -180,7 +184,7 @@ func (h *EventHub) GetRoomById(roomID uuid.UUID) *RoomHub {
 }
 
 func (e *EventHub) CreateRoom(eventID, roomID uuid.UUID, queries *store.Queries) *RoomHub {
-	r := newRoomHub(eventID, roomID, queries, e.logger, e.GuildUpdateChan)
+	r := newRoomHub(eventID, roomID, queries, e.logger, e.GuildUpdateChan, e.rabbitClient, e.executorClient)
 	e.Mu.Lock()
 	e.Rooms[roomID] = r
 	e.Mu.Unlock()

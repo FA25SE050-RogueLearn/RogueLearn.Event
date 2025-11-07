@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/executor"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/rabbitmq"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/handlers"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/scheduler"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/service"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/env"
@@ -69,7 +71,18 @@ func main() {
 	}
 	defer executorClient.Close()
 
-	handlerRepo := handlers.NewHandlerRepo(logger, db, queries, rabbitClient, executorClient)
+	// Initialize the event scheduler
+	eventScheduler := scheduler.NewEventScheduler(queries, db, rabbitClient, logger)
+
+	// Start the scheduler consumer in the background
+	ctx := context.Background()
+	err = eventScheduler.StartConsumer(ctx)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to start event scheduler consumer: %v", err))
+	}
+	logger.Info("Event scheduler consumer started successfully")
+
+	handlerRepo := handlers.NewHandlerRepo(logger, db, queries, rabbitClient, executorClient, eventScheduler)
 
 	app := api.NewApplication(cfg, logger, queries, handlerRepo)
 
@@ -81,9 +94,10 @@ func main() {
 
 	var opts []grpc.ServerOption
 	grpcServer := grpc.NewServer(opts...)
-	protos.RegisterCodeBattleServiceServer(grpcServer, service.NewCodeBattleServer(queries, logger))
+	protos.RegisterEventServiceServer(grpcServer, service.NewEventServiceServer(queries, logger))
 
 	go grpcServer.Serve(lis)
+	logger.Info("GRPC server started successfully", "port", cfg.GrpcPort)
 
 	// run HTTP server
 	err = app.Run()
