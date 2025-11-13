@@ -54,6 +54,51 @@ func (ns NullEventRequestStatus) Value() (driver.Value, error) {
 	return string(ns.EventRequestStatus), nil
 }
 
+type EventStatus string
+
+const (
+	EventStatusPending   EventStatus = "pending"
+	EventStatusQueued    EventStatus = "queued"
+	EventStatusActive    EventStatus = "active"
+	EventStatusCompleted EventStatus = "completed"
+	EventStatusCancelled EventStatus = "cancelled"
+)
+
+func (e *EventStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = EventStatus(s)
+	case string:
+		*e = EventStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for EventStatus: %T", src)
+	}
+	return nil
+}
+
+type NullEventStatus struct {
+	EventStatus EventStatus
+	Valid       bool // Valid is true if EventStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullEventStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.EventStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.EventStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullEventStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.EventStatus), nil
+}
+
 type EventType string
 
 const (
@@ -224,6 +269,8 @@ type Event struct {
 	GuildsPerRoom      pgtype.Int4
 	RoomNamingPrefix   pgtype.Text
 	OriginalRequestID  pgtype.UUID
+	Status             EventStatus
+	AssignmentDate     pgtype.Timestamptz
 }
 
 type EventCodeProblem struct {

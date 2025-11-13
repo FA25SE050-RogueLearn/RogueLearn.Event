@@ -2,7 +2,6 @@ package rabbitmq
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -10,10 +9,13 @@ import (
 )
 
 const (
-	SseEventsExchange        = "sse_events_exchange"
-	DelayedEventsExchange    = "delayed_events_exchange"
-	DelayedEventsQueue       = "delayed_events_queue"
-	ProcessDelayedEventsQueue = "process_delayed_events_queue"
+	SseEventsExchange    = "sse_events_exchange"
+	EventAssignmentQueue = "event_assignment_queue" // Queue for guild-to-room assignments
+
+	// Connection retry configuration
+	maxRetries     = 10               // Maximum number of connection attempts
+	initialBackoff = 1 * time.Second  // Initial backoff duration
+	maxBackoff     = 30 * time.Second // Maximum backoff duration
 )
 
 // RabbitMQClient holds the connection and channel for RabbitMQ operations.
@@ -23,12 +25,51 @@ type RabbitMQClient struct {
 	logger  *slog.Logger
 }
 
-// NewRabbitMQClient establishes a connection, creates a channel, and declares the fanout exchange.
+// NewRabbitMQClient establishes a connection with retry logic, creates a channel, and declares the fanout exchange.
+// It will retry connection with exponential backoff if RabbitMQ is not immediately available.
 func NewRabbitMQClient(url string, logger *slog.Logger) (*RabbitMQClient, error) {
-	conn, err := amqp.Dial(url)
-	if err != nil {
-		return nil, err
+	var conn *amqp.Connection
+	var err error
+	backoff := initialBackoff
+
+	// Retry connection with exponential backoff
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		logger.Info("Attempting to connect to RabbitMQ",
+			"attempt", attempt,
+			"max_retries", maxRetries)
+
+		conn, err = amqp.Dial(url)
+		if err == nil {
+			// Connection successful
+			break
+		}
+
+		// Connection failed
+		logger.Warn("Failed to connect to RabbitMQ, will retry",
+			"attempt", attempt,
+			"max_retries", maxRetries,
+			"backoff", backoff,
+			"error", err)
+
+		if attempt == maxRetries {
+			// Final attempt failed
+			logger.Error("Failed to connect to RabbitMQ after all retries",
+				"attempts", attempt,
+				"error", err)
+			return nil, err
+		}
+
+		// Wait before retrying
+		time.Sleep(backoff)
+
+		// Exponential backoff with cap
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
 	}
+
+	logger.Info("Successfully connected to RabbitMQ")
 
 	ch, err := conn.Channel()
 	if err != nil {
@@ -46,41 +87,22 @@ func NewRabbitMQClient(url string, logger *slog.Logger) (*RabbitMQClient, error)
 		false,             // no-wait
 		nil,               // arguments
 	)
+
 	if err != nil {
 		ch.Close()
 		conn.Close()
 		return nil, err
 	}
 
-	// Declare delayed events exchange (direct exchange)
-	err = ch.ExchangeDeclare(
-		DelayedEventsExchange, // name
-		"direct",              // type
-		true,                  // durable
-		false,                 // auto-deleted
-		false,                 // internal
-		false,                 // no-wait
-		nil,                   // arguments
-	)
-	if err != nil {
-		ch.Close()
-		conn.Close()
-		return nil, err
-	}
-
-	// Declare the delayed queue with DLX (Dead Letter Exchange) configuration
-	// Messages will sit here with a TTL, then get routed to the processing queue
-	args := amqp.Table{
-		"x-dead-letter-exchange": DelayedEventsExchange,
-		"x-dead-letter-routing-key": "process",
-	}
+	// Declare the event assignment queue (for guild-to-room assignments)
+	// This is a standard work queue - multiple consumers can process from it
 	_, err = ch.QueueDeclare(
-		DelayedEventsQueue, // name
-		true,               // durable
-		false,              // delete when unused
-		false,              // exclusive
-		false,              // no-wait
-		args,               // arguments
+		EventAssignmentQueue, // name
+		true,                 // durable (survives broker restart)
+		false,                // delete when unused
+		false,                // exclusive
+		false,                // no-wait
+		nil,                  // arguments
 	)
 	if err != nil {
 		ch.Close()
@@ -88,36 +110,9 @@ func NewRabbitMQClient(url string, logger *slog.Logger) (*RabbitMQClient, error)
 		return nil, err
 	}
 
-	// Declare the processing queue (where delayed messages end up after TTL expires)
-	_, err = ch.QueueDeclare(
-		ProcessDelayedEventsQueue, // name
-		true,                      // durable
-		false,                     // delete when unused
-		false,                     // exclusive
-		false,                     // no-wait
-		nil,                       // arguments
-	)
-	if err != nil {
-		ch.Close()
-		conn.Close()
-		return nil, err
-	}
-
-	// Bind the processing queue to the delayed exchange
-	err = ch.QueueBind(
-		ProcessDelayedEventsQueue, // queue name
-		"process",                 // routing key
-		DelayedEventsExchange,     // exchange
-		false,
-		nil,
-	)
-	if err != nil {
-		ch.Close()
-		conn.Close()
-		return nil, err
-	}
-
-	logger.Info("Successfully connected to RabbitMQ and declared exchanges", "sse_exchange", SseEventsExchange, "delayed_exchange", DelayedEventsExchange)
+	logger.Info("Successfully initialized RabbitMQ client",
+		"sse_exchange", SseEventsExchange,
+		"assignment_queue", EventAssignmentQueue)
 	return &RabbitMQClient{Conn: conn, Channel: ch, logger: logger}, nil
 }
 
@@ -177,35 +172,32 @@ func (c *RabbitMQClient) Consume() (<-chan amqp.Delivery, error) {
 	)
 }
 
-// PublishDelayed sends a message to the delayed queue with a specified delay duration.
-// After the delay expires, the message will be routed to the processing queue.
-func (c *RabbitMQClient) PublishDelayed(ctx context.Context, body []byte, delay time.Duration) error {
-	// Calculate TTL in milliseconds
-	ttlMs := int64(delay / time.Millisecond)
-
+// PublishEventAssignment publishes an event assignment message to the queue.
+// This is called by the /start-pending-events endpoint to trigger guild assignments.
+func (c *RabbitMQClient) PublishEventAssignment(ctx context.Context, body []byte) error {
 	return c.Channel.PublishWithContext(ctx,
-		"",                // exchange (empty for direct routing to queue)
-		DelayedEventsQueue, // routing key (queue name)
-		false,             // mandatory
-		false,             // immediate
+		"",                   // exchange (empty = default)
+		EventAssignmentQueue, // routing key (queue name for default exchange)
+		false,                // mandatory
+		false,                // immediate
 		amqp.Publishing{
 			ContentType:  "application/json",
 			Body:         body,
-			Expiration:   fmt.Sprintf("%d", ttlMs), // TTL in milliseconds as string
-			DeliveryMode: amqp.Persistent,          // Make message persistent
+			DeliveryMode: amqp.Persistent, // Persist messages to disk
 		})
 }
 
-// ConsumeDelayed sets up consumption from the processing queue where delayed messages end up.
-func (c *RabbitMQClient) ConsumeDelayed() (<-chan amqp.Delivery, error) {
+// ConsumeEventAssignments returns a channel of messages from the event assignment queue.
+// Multiple instances can consume from this queue - RabbitMQ distributes messages among them.
+func (c *RabbitMQClient) ConsumeEventAssignments() (<-chan amqp.Delivery, error) {
 	return c.Channel.Consume(
-		ProcessDelayedEventsQueue, // queue
-		"",                        // consumer
-		false,                     // auto-ack (false so we can manually ack after processing)
-		false,                     // exclusive
-		false,                     // no-local
-		false,                     // no-wait
-		nil,                       // args
+		EventAssignmentQueue, // queue
+		"",                   // consumer tag (empty = auto-generated)
+		false,                // auto-ack (false = manual ack after processing)
+		false,                // exclusive
+		false,                // no-local
+		false,                // no-wait
+		nil,                  // args
 	)
 }
 

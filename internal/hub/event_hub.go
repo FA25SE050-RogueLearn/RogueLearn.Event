@@ -17,6 +17,7 @@ import (
 	pb "github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/protos"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -32,6 +33,7 @@ const (
 type EventHub struct {
 	logger        *slog.Logger
 	queries       *store.Queries
+	db            *pgxpool.Pool // Database pool for transactions
 	Rooms         map[uuid.UUID]*RoomHub // roomID -> roomManager
 	Mu            sync.RWMutex
 	leaderboardMu sync.Mutex // Protects leaderboard calculation
@@ -51,19 +53,25 @@ type RoomHub struct {
 	Listerners    map[uuid.UUID]chan<- events.SseEvent // Players connected to this RoomHub
 	logger        *slog.Logger
 	queries       *store.Queries
-	Mu            sync.RWMutex // Protects Listerners map
-	leaderboardMu sync.Mutex   // Protects leaderboard calculation
+	db            *pgxpool.Pool // Database pool for transactions
+	Mu            sync.RWMutex  // Protects Listerners map
+	leaderboardMu sync.Mutex    // Protects leaderboard calculation
 
 	guildUpdateChan chan<- uuid.UUID
 
 	rabbitClient   *rabbitmq.RabbitMQClient
 	executorClient *executor.Client
+
+	// Track last activity for cleanup purposes
+	lastActivity time.Time
+	activityMu   sync.RWMutex
 }
 
-func NewEventHub(queries *store.Queries, logger *slog.Logger, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client) *EventHub {
+func NewEventHub(db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client) *EventHub {
 	e := EventHub{
 		logger:          logger,
 		queries:         queries,
+		db:              db,
 		Rooms:           make(map[uuid.UUID]*RoomHub),
 		GuildUpdateChan: make(chan uuid.UUID, 100), // Buffered channel
 		EventListeners:  make(map[uuid.UUID]map[uuid.UUID]chan<- events.SseEvent),
@@ -100,7 +108,7 @@ func NewEventHub(queries *store.Queries, logger *slog.Logger, rabbitClient *rabb
 	return &e
 }
 
-func newRoomHub(eventID, roomId uuid.UUID, queries *store.Queries, logger *slog.Logger, guildUpdateChan chan<- uuid.UUID, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client) *RoomHub {
+func newRoomHub(eventID, roomId uuid.UUID, db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, guildUpdateChan chan<- uuid.UUID, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client) *RoomHub {
 	return &RoomHub{
 		RoomID:          roomId,
 		EventID:         eventID, // Set the eventID
@@ -108,11 +116,14 @@ func newRoomHub(eventID, roomId uuid.UUID, queries *store.Queries, logger *slog.
 		Listerners:      make(map[uuid.UUID]chan<- events.SseEvent),
 		logger:          logger,
 		queries:         queries,
+		db:              db,
 		Mu:              sync.RWMutex{},
 		leaderboardMu:   sync.Mutex{},
 		guildUpdateChan: guildUpdateChan, // Set the notification channel
 		rabbitClient:    rabbitClient,
 		executorClient:  executorClient,
+		lastActivity:    time.Now(), // Initialize with current time
+		activityMu:      sync.RWMutex{},
 	}
 }
 
@@ -151,8 +162,15 @@ func (e *EventHub) listenForAMQPEvents() {
 
 		switch entityType {
 		case "room":
-			if room := e.GetRoomById(entityID); room != nil {
+			// Use GetOrCreateRoomHub to support lazy-loading across instances
+			// If room doesn't exist in DB, this will return nil and we'll skip the event
+			ctx := context.Background()
+			if room := e.GetOrCreateRoomHub(ctx, entityID); room != nil {
 				room.dispatchEvent(sseEvent)
+			} else {
+				e.logger.Warn("Received RabbitMQ event for non-existent room, skipping",
+					"room_id", entityID,
+					"event_type", sseEvent.EventType)
 			}
 		case "event":
 			e.dispatchEventToEvent(entityID, sseEvent)
@@ -177,19 +195,181 @@ func (r *RoomHub) publishEvent(ctx context.Context, routingKey string, sseEvent 
 	}
 }
 
+// GetRoomById returns a RoomHub if it exists in memory, nil otherwise.
+// This method does NOT query the database or create new RoomHubs.
+// For lazy-loading behavior, use GetOrCreateRoomHub instead.
 func (h *EventHub) GetRoomById(roomID uuid.UUID) *RoomHub {
 	h.Mu.RLock()
 	defer h.Mu.RUnlock()
 	return h.Rooms[roomID]
 }
 
+// GetOrCreateRoomHub attempts to get a RoomHub from memory first.
+// If not found in memory, it queries the database to verify the room exists,
+// then creates and initializes a new RoomHub for it.
+// This enables lazy-loading of rooms across multiple instances.
+//
+// Returns:
+//   - *RoomHub if room exists (either in memory or in database)
+//   - nil if room doesn't exist in database
+//   - error is logged internally but doesn't prevent the method from returning
+func (h *EventHub) GetOrCreateRoomHub(ctx context.Context, roomID uuid.UUID) *RoomHub {
+	// Fast path: Check if room already exists in memory
+	h.Mu.RLock()
+	roomHub, exists := h.Rooms[roomID]
+	h.Mu.RUnlock()
+
+	if exists {
+		h.logger.Info("Room found in memory", "room_id", roomID)
+		return roomHub
+	}
+
+	// Slow path: Room not in memory, try to load from database
+	h.logger.Info("Room not in memory, attempting to load from database", "room_id", roomID)
+
+	// Query database to verify room exists and get its details
+	roomRecord, err := h.queries.GetRoomByID(ctx, pgtype.UUID{Bytes: roomID, Valid: true})
+	if err != nil {
+		// Room doesn't exist in database
+		h.logger.Warn("Room not found in database", "room_id", roomID, "error", err)
+		return nil
+	}
+
+	// Room exists in database, now we need to create the RoomHub
+	// Use write lock to prevent race conditions during creation
+	h.Mu.Lock()
+	defer h.Mu.Unlock()
+
+	// Double-check: another goroutine might have created it while we were waiting for the lock
+	if existingRoom, ok := h.Rooms[roomID]; ok {
+		h.logger.Info("Room was created by another goroutine while waiting", "room_id", roomID)
+		return existingRoom
+	}
+
+	// Extract event ID from the room record
+	eventID := uuid.UUID(roomRecord.EventID.Bytes)
+
+	// Create and initialize the new RoomHub
+	h.logger.Info("Creating new RoomHub from database record",
+		"room_id", roomID,
+		"event_id", eventID,
+		"room_name", roomRecord.Name)
+
+	newRoomHub := newRoomHub(
+		eventID,
+		roomID,
+		h.db,
+		h.queries,
+		h.logger,
+		h.GuildUpdateChan,
+		h.rabbitClient,
+		h.executorClient,
+	)
+
+	// Add to in-memory map
+	h.Rooms[roomID] = newRoomHub
+
+	// Start the RoomHub's event processing goroutine
+	go newRoomHub.Start()
+
+	h.logger.Info("Successfully created and started RoomHub", "room_id", roomID)
+
+	return newRoomHub
+}
+
 func (e *EventHub) CreateRoom(eventID, roomID uuid.UUID, queries *store.Queries) *RoomHub {
-	r := newRoomHub(eventID, roomID, queries, e.logger, e.GuildUpdateChan, e.rabbitClient, e.executorClient)
+	r := newRoomHub(eventID, roomID, e.db, queries, e.logger, e.GuildUpdateChan, e.rabbitClient, e.executorClient)
 	e.Mu.Lock()
 	e.Rooms[roomID] = r
 	e.Mu.Unlock()
 	go r.Start() // Start RoomHub
 	return r
+}
+
+// updateActivity marks the room as recently active
+func (r *RoomHub) updateActivity() {
+	r.activityMu.Lock()
+	r.lastActivity = time.Now()
+	r.activityMu.Unlock()
+}
+
+// getLastActivity returns the time of last activity
+func (r *RoomHub) getLastActivity() time.Time {
+	r.activityMu.RLock()
+	defer r.activityMu.RUnlock()
+	return r.lastActivity
+}
+
+// isInactive returns true if the room has no listeners and hasn't been active
+// for the specified duration
+func (r *RoomHub) isInactive(inactivityThreshold time.Duration) bool {
+	r.Mu.RLock()
+	hasListeners := len(r.Listerners) > 0
+	r.Mu.RUnlock()
+
+	if hasListeners {
+		return false // Room is active if it has listeners
+	}
+
+	lastActivity := r.getLastActivity()
+	return time.Since(lastActivity) > inactivityThreshold
+}
+
+// StartInactiveRoomCleanup starts a background goroutine that periodically
+// removes inactive rooms from memory to prevent memory leaks.
+// Rooms are considered inactive if they have no listeners and haven't
+// processed any events for the specified duration.
+func (e *EventHub) StartInactiveRoomCleanup(ctx context.Context, checkInterval, inactivityThreshold time.Duration) {
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	e.logger.Info("Starting inactive room cleanup routine",
+		"check_interval", checkInterval,
+		"inactivity_threshold", inactivityThreshold)
+
+	for {
+		select {
+		case <-ctx.Done():
+			e.logger.Info("Stopping inactive room cleanup routine")
+			return
+		case <-ticker.C:
+			e.cleanupInactiveRooms(inactivityThreshold)
+		}
+	}
+}
+
+// cleanupInactiveRooms removes rooms that have been inactive for too long
+func (e *EventHub) cleanupInactiveRooms(inactivityThreshold time.Duration) {
+	e.Mu.Lock()
+	defer e.Mu.Unlock()
+
+	roomsToRemove := []uuid.UUID{}
+
+	// Identify inactive rooms
+	for roomID, roomHub := range e.Rooms {
+		if roomHub.isInactive(inactivityThreshold) {
+			roomsToRemove = append(roomsToRemove, roomID)
+		}
+	}
+
+	// Remove inactive rooms
+	for _, roomID := range roomsToRemove {
+		e.logger.Info("Removing inactive room from memory",
+			"room_id", roomID,
+			"last_activity", e.Rooms[roomID].getLastActivity())
+
+		// Close the room's event channel to stop its goroutine
+		close(e.Rooms[roomID].Events)
+
+		// Remove from map
+		delete(e.Rooms, roomID)
+	}
+
+	if len(roomsToRemove) > 0 {
+		e.logger.Info("Cleaned up inactive rooms",
+			"count", len(roomsToRemove),
+			"remaining_rooms", len(e.Rooms))
+	}
 }
 
 func (e *EventHub) Start() {
@@ -249,6 +429,9 @@ func (e *EventHub) dispatchEventToEvent(eventID uuid.UUID, sseEvent events.SseEv
 // Start will start to listen and serve events to players connected to the room
 func (r *RoomHub) Start() {
 	for event := range r.Events {
+		// Mark room as active whenever we process an event
+		r.updateActivity()
+
 		switch e := event.(type) {
 		case events.SolutionSubmitted:
 			if err := r.processSolutionSubmitted(e); err != nil {
@@ -584,19 +767,65 @@ type RoomLeaderboardEntry struct {
 	Place      int32  `json:"place"`
 }
 
-// calculateLeaderboard recalculates and updates player ranks in a single, atomic, and concurrency-safe operation.
+// calculateLeaderboard recalculates and updates player ranks in a transaction with row-level locking.
+// This prevents race conditions across multiple instances by using SELECT FOR UPDATE in the SQL query.
+//
+// How it works:
+// 1. Starts a database transaction
+// 2. SELECT FOR UPDATE locks the rows being read
+// 3. Calculates new rankings
+// 4. Updates the rankings
+// 5. Commits the transaction (releases locks)
+//
+// If Instance A and Instance B both try to calculate simultaneously:
+// - Instance A acquires locks first
+// - Instance B waits until Instance A commits
+// - Instance B then calculates with the updated data
+// This ensures leaderboard consistency across all instances.
 func (r *RoomHub) calculateLeaderboard(ctx context.Context) error {
-	// Lock to prevent concurrent calculations for the same room, which could cause deadlocks or race conditions.
+	// Lock to prevent concurrent calculations on the same instance
+	// (reduces unnecessary database contention from this instance)
 	r.leaderboardMu.Lock()
 	defer r.leaderboardMu.Unlock()
 
 	r.logger.Info("Starting leaderboard calculation for room", "room_id", r.RoomID)
 
-	err := r.queries.CalculateRoomLeaderboard(ctx, toPgtypeUUID(r.RoomID))
+	// Begin a transaction - this is required for SELECT FOR UPDATE to work
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		r.logger.Error("Failed to update player ranks via single query", "room_id", r.RoomID, "error", err)
-		return err
+		r.logger.Error("Failed to begin transaction for leaderboard calculation",
+			"room_id", r.RoomID,
+			"error", err)
+		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
+
+	// Ensure rollback if something goes wrong
+	defer tx.Rollback(ctx)
+
+	// Create a query runner that executes within this transaction
+	qtx := r.queries.WithTx(tx)
+
+	// Execute the leaderboard calculation within the transaction
+	// The SQL query includes "FOR UPDATE" which locks the rows until we commit
+	err = qtx.CalculateRoomLeaderboard(ctx, toPgtypeUUID(r.RoomID))
+	if err != nil {
+		r.logger.Error("Failed to calculate leaderboard within transaction",
+			"room_id", r.RoomID,
+			"error", err)
+		return fmt.Errorf("failed to calculate leaderboard: %w", err)
+	}
+
+	// Commit the transaction - this releases the row locks
+	err = tx.Commit(ctx)
+	if err != nil {
+		r.logger.Error("Failed to commit leaderboard transaction",
+			"room_id", r.RoomID,
+			"error", err)
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	r.logger.Info("Successfully calculated and committed leaderboard",
+		"room_id", r.RoomID)
 
 	return nil
 }

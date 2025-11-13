@@ -29,3 +29,11 @@ CREATE TYPE room_player_state AS ENUM (
     'left',
     'completed'
 );
+
+CREATE TYPE event_status AS ENUM (
+    'pending',    -- Event created, waiting for assignment_date
+    'queued',     -- Assignment triggered, being processed
+    'active',     -- Guilds assigned to rooms, event is running
+    'completed',  -- Event has ended
+    'cancelled'   -- Event was cancelled
+);

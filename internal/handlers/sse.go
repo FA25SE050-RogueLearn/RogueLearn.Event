@@ -45,8 +45,10 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
 
-	// Get the room manager for the requested room.
-	roomHub := hr.eventHub.GetRoomById(roomID)
+	// Get or create the room manager for the requested room.
+	// This supports lazy-loading: if the room exists in DB but not in memory,
+	// it will be loaded automatically. This is crucial for multi-instance deployments.
+	roomHub := hr.eventHub.GetOrCreateRoomHub(r.Context(), roomID)
 	if roomHub == nil {
 		http.Error(w, "room not found or not active", http.StatusNotFound)
 		return

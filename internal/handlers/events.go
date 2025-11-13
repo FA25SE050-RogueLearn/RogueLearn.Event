@@ -274,7 +274,38 @@ func (hr *HandlerRepo) RegisterGuildToEventHandler(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// room_id will be known later
+	// Validate that the event exists and is in a valid state for registration
+	event, err := hr.queries.GetEventByID(r.Context(), toPgtypeUUID(eventID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			hr.notFound(w, r)
+		} else {
+			hr.serverError(w, r, err)
+		}
+		return
+	}
+
+	// Check if event is accepting registrations (pending or queued state)
+	if event.Status != store.EventStatusPending && event.Status != store.EventStatusQueued {
+		hr.badRequest(w, r, fmt.Errorf("event is not accepting registrations (status: %s)", event.Status))
+		return
+	}
+
+	// Check if event has reached max guilds capacity
+	if event.MaxGuilds.Valid {
+		participantCount, err := hr.queries.CountEventParticipants(r.Context(), event.ID)
+		if err != nil {
+			hr.serverError(w, r, err)
+			return
+		}
+
+		if participantCount >= int64(event.MaxGuilds.Int32) {
+			hr.badRequest(w, r, errors.New("event has reached maximum guild capacity"))
+			return
+		}
+	}
+
+	// room_id will be known later (assigned at assignment_date)
 	_, err = hr.queries.CreateEventGuildParticipant(r.Context(), store.CreateEventGuildParticipantParams{
 		EventID: toPgtypeUUID(eventID),
 		GuildID: toPgtypeUUID(guildID),
@@ -287,6 +318,8 @@ func (hr *HandlerRepo) RegisterGuildToEventHandler(w http.ResponseWriter, r *htt
 		}
 		return
 	}
+
+	hr.logger.Info("guild registered to event", "guild_id", guildID, "event_id", eventID)
 
 	err = response.JSON(w, response.JSONResponseParameters{
 		Status:  http.StatusOK,
@@ -450,6 +483,9 @@ func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventR
 	defer tx.Rollback(ctx)
 	qtx := hr.queries.WithTx(tx)
 
+	// Calculate assignment_date: 15 minutes before event start
+	assignmentDate := req.ProposedStartDate.Time.Add(-15 * time.Minute)
+
 	// Create the actual event
 	event, err := qtx.CreateEvent(ctx, store.CreateEventParams{
 		Title:              req.Title,
@@ -463,6 +499,8 @@ func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventR
 		GuildsPerRoom:      pgtype.Int4{Int32: int32(roomConfig.GuildsPerRoom), Valid: true},
 		RoomNamingPrefix:   pgtype.Text{String: roomConfig.RoomNamingPrefix, Valid: true},
 		OriginalRequestID:  req.ID,
+		Status:             store.EventStatusPending, // Event starts in 'pending' state
+		AssignmentDate:     pgtype.Timestamptz{Time: assignmentDate, Valid: true},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create event: %w", err)
@@ -508,21 +546,14 @@ func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventR
 		return fmt.Errorf("failed to commit event approval: %w", err)
 	}
 
-	// Schedule delayed processing for room assignments and event initialization
-	// This happens at the proposed start time
-	if hr.scheduler != nil {
-		err = hr.scheduler.ScheduleEventCreation(ctx, req.ID.Bytes, req.ProposedStartDate.Time)
-		if err != nil {
-			hr.logger.Error("failed to schedule event processing",
-				"event_request_id", req.ID.Bytes,
-				"error", err)
-			// Don't fail the approval if scheduling fails - log it for manual intervention
-			return fmt.Errorf("event approved but failed to schedule processing: %w", err)
-		}
-		hr.logger.Info("scheduled event processing",
-			"event_id", event.ID.Bytes,
-			"scheduled_for", req.ProposedStartDate.Time)
-	}
+	hr.logger.Info("Event approved and created successfully",
+		"event_id", event.ID.Bytes,
+		"assignment_date", assignmentDate,
+		"start_date", req.ProposedStartDate.Time)
+
+	// Note: Guild-to-room assignment will be triggered automatically by the
+	// Alpine cron service when it calls /internal/start-pending-events
+	// at the assignment_date (15 minutes before event start)
 
 	return nil
 }

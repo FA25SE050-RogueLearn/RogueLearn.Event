@@ -66,18 +66,18 @@ func (hr *HandlerRepo) GetProblemHandler(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-func (hr *HandlerRepo) GetRoomProblemsHandler(w http.ResponseWriter, r *http.Request) {
-	roomIDStr := chi.URLParam(r, "event_id")
-	roomIDUID, err := uuid.Parse(roomIDStr)
+func (hr *HandlerRepo) GetEventProblemsHandler(w http.ResponseWriter, r *http.Request) {
+	eventIDStr := chi.URLParam(r, "event_id")
+	eventIDUID, err := uuid.Parse(eventIDStr)
 	if err != nil {
 		hr.badRequest(w, r, err)
 		return
 	}
 
-	cps, err := hr.queries.GetEventCodeProblems(r.Context(), toPgtypeUUID(roomIDUID))
+	cps, err := hr.queries.GetEventCodeProblems(r.Context(), toPgtypeUUID(eventIDUID))
 	if err != nil {
 		if err == sql.ErrNoRows {
-			hr.logger.Info("event code problems not found")
+			hr.logger.Info("event's code problems not found")
 			hr.notFound(w, r)
 			return
 		}
@@ -87,11 +87,21 @@ func (hr *HandlerRepo) GetRoomProblemsHandler(w http.ResponseWriter, r *http.Req
 
 	hr.logger.Info("event code problems found", "event_code_problems", cps)
 
+	// Convert to CodeProblemResponse slice
+	problemResponses := make([]CodeProblemResponse, len(cps))
+	for i, cp := range cps {
+		problemResponses[i] = CodeProblemResponse{
+			Title:            cp.Title,
+			ProblemStatement: cp.ProblemStatement,
+			Difficulty:       cp.Difficulty,
+		}
+	}
+
 	err = response.JSON(w, response.JSONResponseParameters{
 		Status:  http.StatusOK,
 		Success: true,
 		Msg:     "get code problems successfully",
-		Data:    cps,
+		Data:    problemResponses,
 	})
 	if err != nil {
 		hr.logger.Error("failed to parse json", "err", err)
@@ -181,6 +191,18 @@ func toProblemResponse(problem store.CodeProblem) CodeProblemResponse {
 		ProblemStatement: problem.ProblemStatement,
 		Difficulty:       problem.Difficulty,
 	}
+}
+
+func toProblemResponses(problems []store.CodeProblem) []CodeProblemResponse {
+	responses := make([]CodeProblemResponse, len(problems))
+	for i, problem := range problems {
+		responses[i] = CodeProblemResponse{
+			Title:            problem.Title,
+			ProblemStatement: problem.ProblemStatement,
+			Difficulty:       problem.Difficulty,
+		}
+	}
+	return responses
 }
 
 func toProblemDetailResponse(problem store.CodeProblemLanguageDetail) CodeProblemLanguageDetailResponse {

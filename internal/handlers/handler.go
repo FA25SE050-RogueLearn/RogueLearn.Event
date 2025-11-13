@@ -1,12 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"log/slog"
+	"time"
 
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/executor"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/rabbitmq"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/hub"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/scheduler"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/env"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/jwt"
@@ -26,24 +27,45 @@ type HandlerRepo struct {
 	jwtParser      *jwt.JWTParser
 	rabbitClient   *rabbitmq.RabbitMQClient
 	executorClient *executor.Client
-	scheduler      *scheduler.EventScheduler
 }
 
 // NewHandlerRepo creates a new HandlerRepo with the provided dependencies.
-func NewHandlerRepo(logger *slog.Logger, db *pgxpool.Pool, queries *store.Queries, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client, eventScheduler *scheduler.EventScheduler) *HandlerRepo {
-	secKey := env.GetString("JWT_SECRET_KEY", "")
+// It also starts the background cleanup routine for inactive rooms.
+func NewHandlerRepo(ctx context.Context, logger *slog.Logger, db *pgxpool.Pool, queries *store.Queries, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client) *HandlerRepo {
+	// Load JWT configuration
+	secKey := env.GetString("EVENT_SUPABASE_JWT_SECRET", "")
 	if secKey == "" {
-		panic("JWT_SECRET_KEY env not found")
+		print("EVENT_SUPABASE_JWT_SECRET env not found")
+		panic("EVENT_SUPABASE_JWT_SECRET env not found")
 	}
+
+	// Load Supabase Auth Authority URL for JWT validation
+	// The issuer will be constructed as: {SUPABASE_AUTH_AUTHORITY_URL}/auth/v1
+	authAuthorityURL := env.GetString("EVENT_SUPABASE_AUTH_AUTHORITY_URL", "")
+	print("EVENT_SUPABASE_AUTH_AUTHORITY_URL:", authAuthorityURL)
+	var issuer string
+	if authAuthorityURL != "" {
+		issuer = authAuthorityURL + "/auth/v1"
+	}
+
+	// Audience is typically "authenticated" for Supabase
+	audience := "authenticated"
+
+	// Create the event hub (pass db for transaction support)
+	eventHub := hub.NewEventHub(db, queries, logger, rabbitClient, executorClient)
+
+	// Start the cleanup routine for inactive rooms
+	// Check every 5 minutes, remove rooms inactive for more than 30 minutes
+	go eventHub.StartInactiveRoomCleanup(ctx, 5*time.Minute, 30*time.Minute)
+
 	return &HandlerRepo{
 		logger:         logger,
 		db:             db,
 		queries:        queries,
-		jwtParser:      jwt.NewJWTParser(secKey, logger),
-		eventHub:       hub.NewEventHub(queries, logger, rabbitClient, executorClient),
+		jwtParser:      jwt.NewJWTParser(secKey, issuer, audience, logger),
+		eventHub:       eventHub,
 		rabbitClient:   rabbitClient,
 		executorClient: executorClient,
-		scheduler:      eventScheduler,
 	}
 }
 
@@ -52,4 +74,13 @@ func toPgtypeUUID(id uuid.UUID) pgtype.UUID {
 		Bytes: id,
 		Valid: true,
 	}
+}
+
+// Getter methods for consumer access
+func (hr *HandlerRepo) GetRabbitClient() *rabbitmq.RabbitMQClient {
+	return hr.rabbitClient
+}
+
+func (hr *HandlerRepo) GetLogger() *slog.Logger {
+	return hr.logger
 }

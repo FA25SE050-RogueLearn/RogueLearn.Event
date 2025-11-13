@@ -16,8 +16,8 @@ import (
 
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/executor"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/rabbitmq"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/consumer"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/handlers"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/scheduler"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/service"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/env"
@@ -26,20 +26,25 @@ import (
 )
 
 func main() {
+	// Load .env file for development environment
+	// In production (Docker Swarm), this will fail silently and use Docker secrets instead
 	err := godotenv.Load()
 	if err != nil {
-		log.Printf("Error loading .env file: %v", err)
+		// Only log as info since this is expected in production
+		log.Printf("Info: .env file not loaded (this is normal in production): %v", err)
+	} else {
+		log.Printf("Development mode: loaded .env file")
 	}
 
 	cfg := &api.Config{
-		HttpPort: 8080,
-		GrpcPort: 8081,
+		HttpPort: 8084,
+		GrpcPort: 8085,
 	}
 
-	// test area
-	connStr := env.GetString("SUPABASE_DB_CONNECTION_STRING", "")
+	connStr := env.GetString("EVENT_SUPABASE_DB_CONNSTR", "")
 	if connStr == "" {
-		panic("SUPABASE_DB_CONNECTION_STRING environment variable is not set")
+		print("EVENT_SUPABASE_DB_CONNSTR environment variable is not set")
+		panic("EVENT_SUPABASE_DB_CONNSTR environment variable is not set")
 	}
 
 	db, err := database.NewPool(connStr)
@@ -54,35 +59,40 @@ func main() {
 	logger := slog.New(slogHandler)
 	slog.SetDefault(logger) // Set default for any library using slog's default logger
 
-	rabbitMQURL := env.GetString("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
+	rabbitMQURL := env.GetString("EVENT_RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	rabbitClient, err := rabbitmq.NewRabbitMQClient(rabbitMQURL, logger)
 	if err != nil {
+		print("Could not connect to RabbitMQ", rabbitMQURL)
 		panic(fmt.Sprintf("Could not connect to RabbitMQ: %v", err))
 	}
 	defer rabbitClient.Close()
 
-	executorURL := env.GetString("EXECUTOR_URL", "")
+	executorURL := env.GetString("EVENT_EXECUTOR_URL", "")
 	if executorURL == "" {
-		panic("EXECUTOR_URL environment variable is not set")
+		print("EVENT_EXECUTOR_URL environment variable is not set")
+		panic("EVENT_EXECUTOR_URL environment variable is not set")
 	}
 	executorClient, err := executor.NewClient(executorURL)
 	if err != nil {
+		print("Could not connect to Executor", executorURL)
 		panic(fmt.Sprintf("Could not connect to Executor: %v", err))
 	}
 	defer executorClient.Close()
 
-	// Initialize the event scheduler
-	eventScheduler := scheduler.NewEventScheduler(queries, db, rabbitClient, logger)
-
-	// Start the scheduler consumer in the background
+	// Create a context for background goroutines
 	ctx := context.Background()
-	err = eventScheduler.StartConsumer(ctx)
-	if err != nil {
-		panic(fmt.Sprintf("Failed to start event scheduler consumer: %v", err))
-	}
-	logger.Info("Event scheduler consumer started successfully")
 
-	handlerRepo := handlers.NewHandlerRepo(logger, db, queries, rabbitClient, executorClient, eventScheduler)
+	// Create handler repo with context for cleanup routine
+	handlerRepo := handlers.NewHandlerRepo(ctx, logger, db, queries, rabbitClient, executorClient)
+
+	// Start event assignment consumer
+	assignmentConsumer := consumer.NewEventAssignmentConsumer(handlerRepo)
+	err = assignmentConsumer.Start(ctx)
+	if err != nil {
+		print("Failed to start event assignment consumer", err)
+		panic(fmt.Sprintf("Failed to start event assignment consumer: %v", err))
+	}
+	logger.Info("Event assignment consumer started successfully")
 
 	app := api.NewApplication(cfg, logger, queries, handlerRepo)
 

@@ -11,9 +11,11 @@ INSERT INTO events (
   number_of_rooms,
   guilds_per_room,
   room_naming_prefix,
-  original_request_id
+  original_request_id,
+  status,
+  assignment_date
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 RETURNING *;
 
 -- name: GetEventByID :one
@@ -143,6 +145,23 @@ WHERE
 ORDER BY cp.created_at DESC
 LIMIT sqlc.arg(limit_count)
 OFFSET sqlc.arg(offset_count);
+
+-- name: GetRandomCodeProblemsByDifficultyAndTags :many
+-- Randomly select code problems based on difficulty and tag IDs
+-- This is optimized for event problem assignment
+SELECT DISTINCT cp.*
+FROM code_problems cp
+INNER JOIN code_problem_tags cpt ON cp.id = cpt.code_problem_id
+WHERE
+  cp.difficulty = sqlc.arg(difficulty)::int
+  AND (
+    sqlc.arg(tag_ids)::uuid[] IS NULL
+    OR sqlc.arg(tag_ids)::uuid[] = '{}'
+    OR cpt.tag_id = ANY(sqlc.arg(tag_ids)::uuid[])
+  )
+  AND NOT (cp.id = ANY(sqlc.arg(excluded_problem_ids)::uuid[]))
+ORDER BY RANDOM()
+LIMIT sqlc.arg(limit_count);
 
 -- name: UpdateCodeProblem :one
 UPDATE code_problems
@@ -329,7 +348,7 @@ INSERT INTO event_code_problems (event_id, code_problem_id, score)
 VALUES ($1, $2, $3);
 
 -- name: GetEventCodeProblems :many
-SELECT ecp.*, cp.title, cp.difficulty
+SELECT ecp.*, cp.title, cp.difficulty, cp.problem_statement
 FROM event_code_problems ecp
 JOIN code_problems cp ON ecp.code_problem_id = cp.id
 WHERE ecp.event_id = $1
@@ -370,6 +389,10 @@ ORDER BY joined_at ASC;
 SELECT * FROM event_guild_participants
 WHERE event_id = $1
 ORDER BY joined_at ASC;
+
+-- name: CountEventParticipants :one
+SELECT COUNT(*) FROM event_guild_participants
+WHERE event_id = $1;
 
 -- name: AssignGuildToRoom :exec
 UPDATE event_guild_participants
@@ -439,9 +462,9 @@ JOIN languages l ON s.language_id = l.id
 WHERE s.status = $1
 ORDER BY s.submitted_at DESC;
 
--- name: UpdateSubmissionStatus :one
+-- name: UpdateSubmission :one
 UPDATE submissions
-SET status = $2
+SET status = $2, execution_time_ms = $3
 WHERE id = $1
 RETURNING *;
 
@@ -477,12 +500,16 @@ AND le1.snapshot_date = (
 ORDER BY le1.rank ASC;
 
 -- name: CalculateRoomLeaderboard :exec
+-- This query uses SELECT FOR UPDATE to lock rows and prevent race conditions
+-- across multiple instances when calculating leaderboard rankings.
+-- The lock is held until the transaction commits, ensuring atomicity.
 WITH ranked_players AS (
   SELECT
     user_id,
     RANK() OVER (ORDER BY score DESC, joined_at ASC) as new_place
   FROM room_players
   WHERE room_id = $1
+  FOR UPDATE  -- Lock these rows to prevent concurrent modifications
 )
 UPDATE room_players rp
 SET place = rp_ranked.new_place
@@ -640,3 +667,35 @@ SET
   approved_event_id = $5
 WHERE id = $1
 RETURNING *;
+
+
+-- ========================================
+-- Event Assignment Queries (for scheduled guild-to-room assignment)
+-- ========================================
+
+-- name: GetPendingEventsForAssignment :many
+-- Get all events that are ready for guild-to-room assignment
+-- (assignment_date has passed and status is still 'pending')
+SELECT * FROM events
+WHERE status = 'pending'
+  AND assignment_date <= NOW()
+ORDER BY assignment_date ASC;
+
+-- name: UpdateEventStatusToQueued :exec
+-- Atomically mark events as 'queued' to prevent duplicate processing
+-- Returns the events that were successfully updated
+UPDATE events
+SET status = 'queued'
+WHERE id = $1 AND status = 'pending';  -- Only update if still pending
+
+-- name: UpdateEventStatusToActive :exec
+-- Mark event as active after guild assignment is complete
+UPDATE events
+SET status = 'active'
+WHERE id = $1;
+
+-- name: UpdateEventStatusToCompleted :exec
+-- Mark event as completed
+UPDATE events
+SET status = 'completed'
+WHERE id = $1;

@@ -76,6 +76,7 @@ WITH ranked_players AS (
     RANK() OVER (ORDER BY score DESC, joined_at ASC) as new_place
   FROM room_players
   WHERE room_id = $1
+  FOR UPDATE  -- Lock these rows to prevent concurrent modifications
 )
 UPDATE room_players rp
 SET place = rp_ranked.new_place
@@ -83,9 +84,24 @@ FROM ranked_players rp_ranked
 WHERE rp.room_id = $1 AND rp.user_id = rp_ranked.user_id
 `
 
+// This query uses SELECT FOR UPDATE to lock rows and prevent race conditions
+// across multiple instances when calculating leaderboard rankings.
+// The lock is held until the transaction commits, ensuring atomicity.
 func (q *Queries) CalculateRoomLeaderboard(ctx context.Context, roomID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, calculateRoomLeaderboard, roomID)
 	return err
+}
+
+const countEventParticipants = `-- name: CountEventParticipants :one
+SELECT COUNT(*) FROM event_guild_participants
+WHERE event_id = $1
+`
+
+func (q *Queries) CountEventParticipants(ctx context.Context, eventID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countEventParticipants, eventID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const createCodeProblem = `-- name: CreateCodeProblem :one
@@ -179,10 +195,12 @@ INSERT INTO events (
   number_of_rooms,
   guilds_per_room,
   room_naming_prefix,
-  original_request_id
+  original_request_id,
+  status,
+  assignment_date
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date
 `
 
 type CreateEventParams struct {
@@ -197,6 +215,8 @@ type CreateEventParams struct {
 	GuildsPerRoom      pgtype.Int4
 	RoomNamingPrefix   pgtype.Text
 	OriginalRequestID  pgtype.UUID
+	Status             EventStatus
+	AssignmentDate     pgtype.Timestamptz
 }
 
 // Events
@@ -213,6 +233,8 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event
 		arg.GuildsPerRoom,
 		arg.RoomNamingPrefix,
 		arg.OriginalRequestID,
+		arg.Status,
+		arg.AssignmentDate,
 	)
 	var i Event
 	err := row.Scan(
@@ -228,6 +250,8 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event
 		&i.GuildsPerRoom,
 		&i.RoomNamingPrefix,
 		&i.OriginalRequestID,
+		&i.Status,
+		&i.AssignmentDate,
 	)
 	return i, err
 }
@@ -784,7 +808,7 @@ func (q *Queries) DisconnectRoomPlayer(ctx context.Context, arg DisconnectRoomPl
 }
 
 const getActiveEvents = `-- name: GetActiveEvents :many
-SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id FROM events
+SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date FROM events
 WHERE started_date <= NOW() AND end_date >= NOW()
 ORDER BY started_date ASC
 `
@@ -811,6 +835,8 @@ func (q *Queries) GetActiveEvents(ctx context.Context) ([]Event, error) {
 			&i.GuildsPerRoom,
 			&i.RoomNamingPrefix,
 			&i.OriginalRequestID,
+			&i.Status,
+			&i.AssignmentDate,
 		); err != nil {
 			return nil, err
 		}
@@ -1161,7 +1187,7 @@ func (q *Queries) GetCodeProblemsByTag(ctx context.Context, id pgtype.UUID) ([]G
 }
 
 const getEventByID = `-- name: GetEventByID :one
-SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id FROM events WHERE id = $1
+SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date FROM events WHERE id = $1
 `
 
 func (q *Queries) GetEventByID(ctx context.Context, id pgtype.UUID) (Event, error) {
@@ -1180,6 +1206,8 @@ func (q *Queries) GetEventByID(ctx context.Context, id pgtype.UUID) (Event, erro
 		&i.GuildsPerRoom,
 		&i.RoomNamingPrefix,
 		&i.OriginalRequestID,
+		&i.Status,
+		&i.AssignmentDate,
 	)
 	return i, err
 }
@@ -1218,7 +1246,7 @@ func (q *Queries) GetEventCodeProblem(ctx context.Context, arg GetEventCodeProbl
 }
 
 const getEventCodeProblems = `-- name: GetEventCodeProblems :many
-SELECT ecp.event_id, ecp.code_problem_id, ecp.score, cp.title, cp.difficulty
+SELECT ecp.event_id, ecp.code_problem_id, ecp.score, cp.title, cp.difficulty, cp.problem_statement
 FROM event_code_problems ecp
 JOIN code_problems cp ON ecp.code_problem_id = cp.id
 WHERE ecp.event_id = $1
@@ -1226,11 +1254,12 @@ ORDER BY ecp.score DESC
 `
 
 type GetEventCodeProblemsRow struct {
-	EventID       pgtype.UUID
-	CodeProblemID pgtype.UUID
-	Score         int32
-	Title         string
-	Difficulty    int32
+	EventID          pgtype.UUID
+	CodeProblemID    pgtype.UUID
+	Score            int32
+	Title            string
+	Difficulty       int32
+	ProblemStatement string
 }
 
 func (q *Queries) GetEventCodeProblems(ctx context.Context, eventID pgtype.UUID) ([]GetEventCodeProblemsRow, error) {
@@ -1248,6 +1277,7 @@ func (q *Queries) GetEventCodeProblems(ctx context.Context, eventID pgtype.UUID)
 			&i.Score,
 			&i.Title,
 			&i.Difficulty,
+			&i.ProblemStatement,
 		); err != nil {
 			return nil, err
 		}
@@ -1374,7 +1404,7 @@ func (q *Queries) GetEventRequestByID(ctx context.Context, id pgtype.UUID) (Even
 
 const getEventWithProblemsAndLanguages = `-- name: GetEventWithProblemsAndLanguages :many
 SELECT
-    e.id, e.title, e.description, e.type, e.started_date, e.end_date, e.max_guilds, e.max_players_per_guild, e.number_of_rooms, e.guilds_per_room, e.room_naming_prefix, e.original_request_id,
+    e.id, e.title, e.description, e.type, e.started_date, e.end_date, e.max_guilds, e.max_players_per_guild, e.number_of_rooms, e.guilds_per_room, e.room_naming_prefix, e.original_request_id, e.status, e.assignment_date,
     cp.id as problem_id,
     cp.title as problem_title,
     cp.difficulty as problem_difficulty,
@@ -1399,6 +1429,8 @@ type GetEventWithProblemsAndLanguagesRow struct {
 	GuildsPerRoom      pgtype.Int4
 	RoomNamingPrefix   pgtype.Text
 	OriginalRequestID  pgtype.UUID
+	Status             EventStatus
+	AssignmentDate     pgtype.Timestamptz
 	ProblemID          pgtype.UUID
 	ProblemTitle       pgtype.Text
 	ProblemDifficulty  pgtype.Int4
@@ -1428,6 +1460,8 @@ func (q *Queries) GetEventWithProblemsAndLanguages(ctx context.Context, id pgtyp
 			&i.GuildsPerRoom,
 			&i.RoomNamingPrefix,
 			&i.OriginalRequestID,
+			&i.Status,
+			&i.AssignmentDate,
 			&i.ProblemID,
 			&i.ProblemTitle,
 			&i.ProblemDifficulty,
@@ -1444,7 +1478,7 @@ func (q *Queries) GetEventWithProblemsAndLanguages(ctx context.Context, id pgtyp
 }
 
 const getEvents = `-- name: GetEvents :many
-SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id FROM events
+SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date FROM events
 ORDER BY started_date ASC
 LIMIT $1
 OFFSET $2
@@ -1477,6 +1511,8 @@ func (q *Queries) GetEvents(ctx context.Context, arg GetEventsParams) ([]Event, 
 			&i.GuildsPerRoom,
 			&i.RoomNamingPrefix,
 			&i.OriginalRequestID,
+			&i.Status,
+			&i.AssignmentDate,
 		); err != nil {
 			return nil, err
 		}
@@ -1489,7 +1525,7 @@ func (q *Queries) GetEvents(ctx context.Context, arg GetEventsParams) ([]Event, 
 }
 
 const getEventsByType = `-- name: GetEventsByType :many
-SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id FROM events
+SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date FROM events
 WHERE type = $1
 ORDER BY started_date ASC
 `
@@ -1516,6 +1552,8 @@ func (q *Queries) GetEventsByType(ctx context.Context, type_ EventType) ([]Event
 			&i.GuildsPerRoom,
 			&i.RoomNamingPrefix,
 			&i.OriginalRequestID,
+			&i.Status,
+			&i.AssignmentDate,
 		); err != nil {
 			return nil, err
 		}
@@ -1921,6 +1959,54 @@ func (q *Queries) GetLeaderboardByUser(ctx context.Context, userID pgtype.UUID) 
 	return items, nil
 }
 
+const getPendingEventsForAssignment = `-- name: GetPendingEventsForAssignment :many
+
+SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date FROM events
+WHERE status = 'pending'
+  AND assignment_date <= NOW()
+ORDER BY assignment_date ASC
+`
+
+// ========================================
+// Event Assignment Queries (for scheduled guild-to-room assignment)
+// ========================================
+// Get all events that are ready for guild-to-room assignment
+// (assignment_date has passed and status is still 'pending')
+func (q *Queries) GetPendingEventsForAssignment(ctx context.Context) ([]Event, error) {
+	rows, err := q.db.Query(ctx, getPendingEventsForAssignment)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Event
+	for rows.Next() {
+		var i Event
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Description,
+			&i.Type,
+			&i.StartedDate,
+			&i.EndDate,
+			&i.MaxGuilds,
+			&i.MaxPlayersPerGuild,
+			&i.NumberOfRooms,
+			&i.GuildsPerRoom,
+			&i.RoomNamingPrefix,
+			&i.OriginalRequestID,
+			&i.Status,
+			&i.AssignmentDate,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getPlayersByUserID = `-- name: GetPlayersByUserID :many
 SELECT room_id, user_id, username, score, place, state, disconnected_at, joined_at FROM room_players
 WHERE user_id = $1
@@ -2006,6 +2092,62 @@ func (q *Queries) GetPublicTestCasesByProblem(ctx context.Context, codeProblemID
 			&i.Input,
 			&i.ExpectedOutput,
 			&i.IsHidden,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getRandomCodeProblemsByDifficultyAndTags = `-- name: GetRandomCodeProblemsByDifficultyAndTags :many
+SELECT DISTINCT cp.id, cp.title, cp.problem_statement, cp.difficulty, cp.created_at
+FROM code_problems cp
+INNER JOIN code_problem_tags cpt ON cp.id = cpt.code_problem_id
+WHERE
+  cp.difficulty = $1::int
+  AND (
+    $2::uuid[] IS NULL
+    OR $2::uuid[] = '{}'
+    OR cpt.tag_id = ANY($2::uuid[])
+  )
+  AND NOT (cp.id = ANY($3::uuid[]))
+ORDER BY RANDOM()
+LIMIT $4
+`
+
+type GetRandomCodeProblemsByDifficultyAndTagsParams struct {
+	Difficulty         int32
+	TagIds             []pgtype.UUID
+	ExcludedProblemIds []pgtype.UUID
+	LimitCount         int32
+}
+
+// Randomly select code problems based on difficulty and tag IDs
+// This is optimized for event problem assignment
+func (q *Queries) GetRandomCodeProblemsByDifficultyAndTags(ctx context.Context, arg GetRandomCodeProblemsByDifficultyAndTagsParams) ([]CodeProblem, error) {
+	rows, err := q.db.Query(ctx, getRandomCodeProblemsByDifficultyAndTags,
+		arg.Difficulty,
+		arg.TagIds,
+		arg.ExcludedProblemIds,
+		arg.LimitCount,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CodeProblem
+	for rows.Next() {
+		var i CodeProblem
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.ProblemStatement,
+			&i.Difficulty,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -2902,7 +3044,7 @@ SET
   guilds_per_room = $10,
   room_naming_prefix = $11
 WHERE id = $1
-RETURNING id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id
+RETURNING id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date
 `
 
 type UpdateEventParams struct {
@@ -2947,6 +3089,8 @@ func (q *Queries) UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event
 		&i.GuildsPerRoom,
 		&i.RoomNamingPrefix,
 		&i.OriginalRequestID,
+		&i.Status,
+		&i.AssignmentDate,
 	)
 	return i, err
 }
@@ -3045,6 +3189,45 @@ func (q *Queries) UpdateEventRequestStatus(ctx context.Context, arg UpdateEventR
 		&i.ApprovedEventID,
 	)
 	return i, err
+}
+
+const updateEventStatusToActive = `-- name: UpdateEventStatusToActive :exec
+
+UPDATE events
+SET status = 'active'
+WHERE id = $1
+`
+
+// Only update if still pending
+// Mark event as active after guild assignment is complete
+func (q *Queries) UpdateEventStatusToActive(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, updateEventStatusToActive, id)
+	return err
+}
+
+const updateEventStatusToCompleted = `-- name: UpdateEventStatusToCompleted :exec
+UPDATE events
+SET status = 'completed'
+WHERE id = $1
+`
+
+// Mark event as completed
+func (q *Queries) UpdateEventStatusToCompleted(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, updateEventStatusToCompleted, id)
+	return err
+}
+
+const updateEventStatusToQueued = `-- name: UpdateEventStatusToQueued :exec
+UPDATE events
+SET status = 'queued'
+WHERE id = $1 AND status = 'pending'
+`
+
+// Atomically mark events as 'queued' to prevent duplicate processing
+// Returns the events that were successfully updated
+func (q *Queries) UpdateEventStatusToQueued(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, updateEventStatusToQueued, id)
+	return err
 }
 
 const updateGuildLeaderboardEntry = `-- name: UpdateGuildLeaderboardEntry :one
@@ -3230,20 +3413,21 @@ func (q *Queries) UpdateRoomPlayerState(ctx context.Context, arg UpdateRoomPlaye
 	return i, err
 }
 
-const updateSubmissionStatus = `-- name: UpdateSubmissionStatus :one
+const updateSubmission = `-- name: UpdateSubmission :one
 UPDATE submissions
-SET status = $2
+SET status = $2, execution_time_ms = $3
 WHERE id = $1
 RETURNING id, user_id, code_problem_id, language_id, room_id, code_submitted, status, execution_time_ms, submitted_at, submitted_guild_id
 `
 
-type UpdateSubmissionStatusParams struct {
-	ID     pgtype.UUID
-	Status SubmissionStatus
+type UpdateSubmissionParams struct {
+	ID              pgtype.UUID
+	Status          SubmissionStatus
+	ExecutionTimeMs pgtype.Int4
 }
 
-func (q *Queries) UpdateSubmissionStatus(ctx context.Context, arg UpdateSubmissionStatusParams) (Submission, error) {
-	row := q.db.QueryRow(ctx, updateSubmissionStatus, arg.ID, arg.Status)
+func (q *Queries) UpdateSubmission(ctx context.Context, arg UpdateSubmissionParams) (Submission, error) {
+	row := q.db.QueryRow(ctx, updateSubmission, arg.ID, arg.Status, arg.ExecutionTimeMs)
 	var i Submission
 	err := row.Scan(
 		&i.ID,

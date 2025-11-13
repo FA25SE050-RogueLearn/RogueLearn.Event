@@ -30,4 +30,4 @@ COPY --from=builder /app/event .
 EXPOSE 8083 8084
 
 # Run the application
-CMD [" /app/event "]
+CMD ["/app/event"]

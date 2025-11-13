@@ -28,6 +28,14 @@ CREATE TYPE room_player_state AS ENUM (
     'completed'
 );
 
+CREATE TYPE event_status AS ENUM (
+    'pending',    -- Event created, waiting for assignment_date
+    'queued',     -- Assignment triggered, being processed
+    'active',     -- Guilds assigned to rooms, event is running
+    'completed',  -- Event has ended
+    'cancelled'   -- Event was cancelled
+);
+
 CREATE TABLE public.code_problem_language_details (
   code_problem_id uuid NOT NULL,
   language_id uuid NOT NULL,
@@ -84,9 +92,16 @@ CREATE TABLE public.events (
   guilds_per_room integer,
   room_naming_prefix text,
   original_request_id uuid,
+  status event_status NOT NULL DEFAULT 'pending',
+  assignment_date timestamp with time zone,  -- When to assign guilds to rooms (e.g., 15 min before start)
   CONSTRAINT events_pkey PRIMARY KEY (id),
   CONSTRAINT events_original_request_id_fkey FOREIGN KEY (original_request_id) REFERENCES public.event_requests(id)
 );
+
+-- Index for efficiently querying events ready for assignment
+CREATE INDEX IF NOT EXISTS idx_events_assignment_pending
+ON public.events(assignment_date)
+WHERE status = 'pending';
 CREATE TABLE public.guild_leaderboard_entries (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   guild_id uuid NOT NULL,

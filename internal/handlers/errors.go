@@ -82,3 +82,8 @@ func (hr *HandlerRepo) unauthorized(w http.ResponseWriter, r *http.Request) {
 	message := "You must be authenticated to access this resource"
 	hr.errorMessage(w, r, http.StatusUnauthorized, message, nil)
 }
+
+func (hr *HandlerRepo) forbidden(w http.ResponseWriter, r *http.Request) {
+	message := "You do not have permission to access this resource"
+	hr.errorMessage(w, r, http.StatusForbidden, message, nil)
+}

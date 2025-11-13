@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/events"
@@ -33,16 +35,22 @@ type SubmissionRequest struct {
 }
 
 type SubmissionResponse struct {
-	Stdout        string `json:"stdout"`
-	Stderr        string `json:"stderr"`
-	Message       string `json:"message"`
-	Success       bool   `json:"success"`
-	Error         string `json:"error"`
-	ExecutionTime string `json:"execution_time_ms"`
+	Stdout          string                 `json:"stdout,omitempty"`
+	Stderr          string                 `json:"stderr,omitempty"`
+	Message         string                 `json:"message,omitempty"`
+	Error           string                 `json:"error,omitempty"`
+	Success         bool                   `json:"success,omitempty"`
+	CodeProblemID   string                 `json:"code_problem_id,omitempty"`
+	ProblemTitle    string                 `json:"problem_title,omitempty"`
+	LanguageID      string                 `json:"language_id,omitempty"`
+	LanguageName    string                 `json:"language_name,omitempty"`
+	Status          store.SubmissionStatus `json:"status"`
+	SubmittedAt     time.Time              `json:"submitted_at"`
+	ExecutionTimeMs string                 `json:"execution_time_ms,omitempty"`
 }
 
 // SubmitSolutionHandler will compile and run test cases of a solution for a code problem
-func (hr *HandlerRepo) SubmitSolutionHandler(w http.ResponseWriter, r *http.Request) {
+func (hr *HandlerRepo) SubmitHandler(w http.ResponseWriter, r *http.Request) {
 	var req SubmissionRequest
 	err := request.DecodeJSON(w, r, &req)
 	if err != nil {
@@ -50,9 +58,17 @@ func (hr *HandlerRepo) SubmitSolutionHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	userClaims, err := GetUserClaims(r.Context())
+	if err != nil {
+		hr.logger.Error("failed to get user claims", "err", err)
+		hr.badRequest(w, r, err)
+		return
+	}
+
+	hr.logger.Info("userClaims parsed!", "user_claims", *userClaims)
+
 	// get player_id through query param in development stage
-	playerIDStr := r.URL.Query().Get("player_id")
-	playerID, err := uuid.Parse(playerIDStr)
+	playerID, err := uuid.Parse(userClaims.GetUserID())
 	if err != nil {
 		hr.badRequest(w, r, errors.New("failed to parse player_id"))
 		return
@@ -129,7 +145,7 @@ func (hr *HandlerRepo) SubmitSolutionHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	err = hr.updateSubmissionStatus(ctx, s.ID, result)
+	err = hr.updateSubmission(ctx, s.ID, result)
 	if err != nil {
 		hr.logger.Error("failed to update submission status", "err", err)
 		hr.serverError(w, r, ErrInternalServer)
@@ -139,32 +155,98 @@ func (hr *HandlerRepo) SubmitSolutionHandler(w http.ResponseWriter, r *http.Requ
 	response.JSON(w, response.JSONResponseParameters{
 		Status: http.StatusOK,
 		Data: SubmissionResponse{
-			Stdout:        result.Stdout,
-			Stderr:        result.Stderr,
-			Message:       result.Message,
-			Success:       result.Success,
-			Error:         result.ErrorType,
-			ExecutionTime: result.ExecutionTimeMs,
+			Stdout:          result.Stdout,
+			Stderr:          result.Stderr,
+			Message:         result.Message,
+			Success:         result.Success,
+			Error:           result.ErrorType,
+			CodeProblemID:   s.CodeProblemID.String(),
+			LanguageID:      s.LanguageID.String(),
+			Status:          s.Status,
+			SubmittedAt:     s.SubmittedAt.Time,
+			ExecutionTimeMs: result.ExecutionTimeMs,
 		},
 		Success: true,
-		Msg:     "solution submitted successfully.",
+		Msg:     "submitted successfully.",
 		ErrMsg:  "",
 	})
 }
 
-// Helper function to convert store.TestCase to pb.TestCase
-func convertTestCases(storeTestCases []store.TestCase) []*pb.TestCase {
-	pbTestCases := make([]*pb.TestCase, len(storeTestCases))
-	for i, tc := range storeTestCases {
-		pbTestCases[i] = &pb.TestCase{
-			Input:          tc.Input,
-			ExpectedOutput: tc.ExpectedOutput,
-		}
+func (hr *HandlerRepo) GetMySubmissionsHandler(w http.ResponseWriter, r *http.Request) {
+
+	userClaims, err := GetUserClaims(r.Context())
+	if err != nil {
+		hr.logger.Error("failed to get user claims", "err", err)
+		hr.badRequest(w, r, err)
+		return
 	}
-	return pbTestCases
+
+	hr.logger.Info("userClaims parsed!", "user_claims", *userClaims)
+
+	// get player_id through query param in development stage
+	userID, err := uuid.Parse(userClaims.GetUserID())
+	if err != nil {
+		hr.badRequest(w, r, errors.New("failed to parse player_id"))
+		return
+	}
+
+	submissions, err := hr.queries.GetSubmissionsByUser(r.Context(), toPgtypeUUID(userID))
+	if err != nil {
+		hr.logger.Error("failed to get submissions", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	response.JSON(w, response.JSONResponseParameters{
+		Status:  http.StatusOK,
+		Data:    hr.toSubmissionResponses(submissions),
+		Success: true,
+		Msg:     "get submissions successfully",
+	})
 }
 
-func (hr *HandlerRepo) updateSubmissionStatus(ctx context.Context, submissionID pgtype.UUID, result *pb.ExecuteResponse) error {
+// Helper function to convert execution time from string (e.g., "200ms") to pgtype.Int4
+func parseExecutionTime(execTimeStr string) pgtype.Int4 {
+	if execTimeStr == "" {
+		return pgtype.Int4{}
+	}
+
+	// Remove "ms" suffix and parse the numeric value
+	timeStr := strings.TrimSuffix(execTimeStr, "ms")
+	timeValue, err := strconv.ParseInt(timeStr, 10, 32)
+	if err != nil {
+		// Return null pgtype.Int4 if parsing fails
+		return pgtype.Int4{}
+	}
+
+	return pgtype.Int4{Int32: int32(timeValue), Valid: true}
+}
+
+// Helper function to convert pgtype.Int4 to string with "ms" suffix
+func formatExecutionTime(execTime pgtype.Int4) string {
+	if !execTime.Valid {
+		return ""
+	}
+	return strconv.FormatInt(int64(execTime.Int32), 10) + "ms"
+}
+
+// toSubmissionResponses converts database submission rows to response format
+func (hr *HandlerRepo) toSubmissionResponses(submissions []store.GetSubmissionsByUserRow) []SubmissionResponse {
+	var responses []SubmissionResponse
+	for _, s := range submissions {
+		responses = append(responses, SubmissionResponse{
+			CodeProblemID:   s.CodeProblemID.String(),
+			ProblemTitle:    s.ProblemTitle,
+			LanguageName:    s.LanguageName,
+			Status:          s.Status,
+			SubmittedAt:     s.SubmittedAt.Time,
+			ExecutionTimeMs: formatExecutionTime(s.ExecutionTimeMs),
+		})
+	}
+	return responses
+}
+
+func (hr *HandlerRepo) updateSubmission(ctx context.Context, submissionID pgtype.UUID, result *pb.ExecuteResponse) error {
 	var status store.SubmissionStatus
 
 	if result.Success {
@@ -185,9 +267,16 @@ func (hr *HandlerRepo) updateSubmissionStatus(ctx context.Context, submissionID 
 		}
 	}
 
-	_, err := hr.queries.UpdateSubmissionStatus(ctx, store.UpdateSubmissionStatusParams{
-		ID:     submissionID,
-		Status: status,
+	// Convert execution time from string (e.g., "200ms") to pgtype.Int4
+	executionTimeMs := parseExecutionTime(result.ExecutionTimeMs)
+	if executionTimeMs == (pgtype.Int4{}) && result.ExecutionTimeMs != "" {
+		hr.logger.Warn("failed to parse execution time", "value", result.ExecutionTimeMs)
+	}
+
+	_, err := hr.queries.UpdateSubmission(ctx, store.UpdateSubmissionParams{
+		ID:              submissionID,
+		Status:          status,
+		ExecutionTimeMs: executionTimeMs,
 	})
 	if err != nil {
 		return err
@@ -197,7 +286,7 @@ func (hr *HandlerRepo) updateSubmissionStatus(ctx context.Context, submissionID 
 }
 
 // SubmitSolutionInRoomHandler creates an event and pass it to the room's channel
-func (hr *HandlerRepo) SubmitSolutionInRoomHandler(w http.ResponseWriter, r *http.Request) {
+func (hr *HandlerRepo) SubmitInRoomHandler(w http.ResponseWriter, r *http.Request) {
 	// claims, ok := r.Context().Value("asd").(*jwt.UserClaims)
 	// if !ok {
 	// 	// hr.unauthorizedResponse(w, r)
@@ -239,7 +328,9 @@ func (hr *HandlerRepo) SubmitSolutionInRoomHandler(w http.ResponseWriter, r *htt
 		return
 	}
 
-	roomHub := hr.eventHub.GetRoomById(roomID)
+	// Get or create the room hub - supports lazy-loading from database
+	// This ensures submissions work even if the room wasn't pre-loaded on this instance
+	roomHub := hr.eventHub.GetOrCreateRoomHub(r.Context(), roomID)
 	if roomHub == nil {
 		hr.notFound(w, r)
 		return
@@ -268,9 +359,21 @@ func (hr *HandlerRepo) SubmitSolutionInRoomHandler(w http.ResponseWriter, r *htt
 	err = response.JSON(w, response.JSONResponseParameters{
 		Status:  http.StatusAccepted,
 		Success: true,
-		Msg:     "Solution submitted successfully and is being processed.",
+		Msg:     "Submitted successfully and is being processed.",
 	})
 	if err != nil {
 		hr.serverError(w, r, err)
 	}
+}
+
+// Helper function to convert store.TestCase to pb.TestCase
+func convertTestCases(storeTestCases []store.TestCase) []*pb.TestCase {
+	pbTestCases := make([]*pb.TestCase, len(storeTestCases))
+	for i, tc := range storeTestCases {
+		pbTestCases[i] = &pb.TestCase{
+			Input:          tc.Input,
+			ExpectedOutput: tc.ExpectedOutput,
+		}
+	}
+	return pbTestCases
 }
