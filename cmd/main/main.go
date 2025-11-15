@@ -16,7 +16,6 @@ import (
 
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/executor"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/rabbitmq"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/consumer"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/handlers"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/service"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
@@ -84,15 +83,6 @@ func main() {
 
 	// Create handler repo with context for cleanup routine
 	handlerRepo := handlers.NewHandlerRepo(ctx, logger, db, queries, rabbitClient, executorClient)
-
-	// Start event assignment consumer
-	assignmentConsumer := consumer.NewEventAssignmentConsumer(handlerRepo)
-	err = assignmentConsumer.Start(ctx)
-	if err != nil {
-		print("Failed to start event assignment consumer", err)
-		panic(fmt.Sprintf("Failed to start event assignment consumer: %v", err))
-	}
-	logger.Info("Event assignment consumer started successfully")
 
 	app := api.NewApplication(cfg, logger, queries, handlerRepo)
 

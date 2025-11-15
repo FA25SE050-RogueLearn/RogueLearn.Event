@@ -9,8 +9,7 @@ import (
 )
 
 const (
-	SseEventsExchange    = "sse_events_exchange"
-	EventAssignmentQueue = "event_assignment_queue" // Queue for guild-to-room assignments
+	SseEventsExchange = "sse_events_exchange"
 
 	// Connection retry configuration
 	maxRetries     = 10               // Maximum number of connection attempts
@@ -94,25 +93,8 @@ func NewRabbitMQClient(url string, logger *slog.Logger) (*RabbitMQClient, error)
 		return nil, err
 	}
 
-	// Declare the event assignment queue (for guild-to-room assignments)
-	// This is a standard work queue - multiple consumers can process from it
-	_, err = ch.QueueDeclare(
-		EventAssignmentQueue, // name
-		true,                 // durable (survives broker restart)
-		false,                // delete when unused
-		false,                // exclusive
-		false,                // no-wait
-		nil,                  // arguments
-	)
-	if err != nil {
-		ch.Close()
-		conn.Close()
-		return nil, err
-	}
-
 	logger.Info("Successfully initialized RabbitMQ client",
-		"sse_exchange", SseEventsExchange,
-		"assignment_queue", EventAssignmentQueue)
+		"sse_exchange", SseEventsExchange)
 	return &RabbitMQClient{Conn: conn, Channel: ch, logger: logger}, nil
 }
 
@@ -169,35 +151,6 @@ func (c *RabbitMQClient) Consume() (<-chan amqp.Delivery, error) {
 		false,  // no-local
 		false,  // no-wait
 		nil,    // args
-	)
-}
-
-// PublishEventAssignment publishes an event assignment message to the queue.
-// This is called by the /start-pending-events endpoint to trigger guild assignments.
-func (c *RabbitMQClient) PublishEventAssignment(ctx context.Context, body []byte) error {
-	return c.Channel.PublishWithContext(ctx,
-		"",                   // exchange (empty = default)
-		EventAssignmentQueue, // routing key (queue name for default exchange)
-		false,                // mandatory
-		false,                // immediate
-		amqp.Publishing{
-			ContentType:  "application/json",
-			Body:         body,
-			DeliveryMode: amqp.Persistent, // Persist messages to disk
-		})
-}
-
-// ConsumeEventAssignments returns a channel of messages from the event assignment queue.
-// Multiple instances can consume from this queue - RabbitMQ distributes messages among them.
-func (c *RabbitMQClient) ConsumeEventAssignments() (<-chan amqp.Delivery, error) {
-	return c.Channel.Consume(
-		EventAssignmentQueue, // queue
-		"",                   // consumer tag (empty = auto-generated)
-		false,                // auto-ack (false = manual ack after processing)
-		false,                // exclusive
-		false,                // no-local
-		false,                // no-wait
-		nil,                  // args
 	)
 }
 

@@ -285,8 +285,8 @@ func (hr *HandlerRepo) RegisterGuildToEventHandler(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// Check if event is accepting registrations (pending or queued state)
-	if event.Status != store.EventStatusPending && event.Status != store.EventStatusQueued {
+	// Check if event is accepting registrations (only pending state)
+	if event.Status != store.EventStatusPending {
 		hr.badRequest(w, r, fmt.Errorf("event is not accepting registrations (status: %s)", event.Status))
 		return
 	}

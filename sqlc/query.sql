@@ -681,19 +681,14 @@ WHERE status = 'pending'
   AND assignment_date <= NOW()
 ORDER BY assignment_date ASC;
 
--- name: UpdateEventStatusToQueued :one
--- Atomically mark events as 'queued' to prevent duplicate processing
--- Returns the updated event if successful, or NULL if already queued by another instance
-UPDATE events
-SET status = 'queued'
-WHERE id = $1 AND status = 'pending'  -- Only update if still pending
-RETURNING *;
-
--- name: UpdateEventStatusToActive :exec
--- Mark event as active after guild assignment is complete
+-- name: UpdateEventStatusToActive :one
+-- Atomically mark event as 'active' and prevent duplicate processing
+-- Only updates if the event is still in 'pending' status
+-- Returns the updated event if successful, or error if already processed
 UPDATE events
 SET status = 'active'
-WHERE id = $1;
+WHERE id = $1 AND status = 'pending'
+RETURNING *;
 
 -- name: UpdateEventStatusToCompleted :exec
 -- Mark event as completed

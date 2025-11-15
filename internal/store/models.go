@@ -58,7 +58,6 @@ type EventStatus string
 
 const (
 	EventStatusPending   EventStatus = "pending"
-	EventStatusQueued    EventStatus = "queued"
 	EventStatusActive    EventStatus = "active"
 	EventStatusCompleted EventStatus = "completed"
 	EventStatusCancelled EventStatus = "cancelled"

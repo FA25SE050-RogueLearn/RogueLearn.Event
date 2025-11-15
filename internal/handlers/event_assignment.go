@@ -14,27 +14,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// EventAssignmentMessage represents the message sent to RabbitMQ
-// for processing guild-to-room assignments
-type EventAssignmentMessage struct {
-	EventID uuid.UUID `json:"event_id"`
-}
-
 // StartPendingEventsHandler is called by the Alpine cron service every 60 seconds.
-// It finds events whose assignment_date has passed and triggers their processing.
+// It finds events whose assignment_date has passed and processes them directly.
 //
 // Flow:
 // 1. Query events WHERE assignment_date <= NOW() AND status = 'pending'
-// 2. Update their status to 'queued' atomically (prevents duplicate processing)
-// 3. Publish each event ID to RabbitMQ for asynchronous processing
-// 4. Return the list of events that were queued
+// 2. Process each event directly with 30-second timeout per event
+// 3. Atomic pending → active transition prevents duplicate processing
+// 4. Return processing results
 func (hr *HandlerRepo) StartPendingEventsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
+	ctx := r.Context()
 
 	hr.logger.Info("StartPendingEventsHandler called - checking for events ready for assignment")
 
-	// Step 1: Find all events that are ready for guild assignment
+	// Find all events that are ready for guild assignment
 	pendingEvents, err := hr.queries.GetPendingEventsForAssignment(ctx)
 	if err != nil {
 		hr.logger.Error("Failed to query pending events", "error", err)
@@ -46,7 +39,7 @@ func (hr *HandlerRepo) StartPendingEventsHandler(w http.ResponseWriter, r *http.
 		hr.logger.Info("No events ready for assignment")
 		response.JSON(w, response.JSONResponseParameters{
 			Status:  http.StatusOK,
-			Success: false,
+			Success: true,
 			Msg:     "No events ready for assignment",
 		})
 		return
@@ -55,87 +48,61 @@ func (hr *HandlerRepo) StartPendingEventsHandler(w http.ResponseWriter, r *http.
 	hr.logger.Info("Found events ready for assignment", "count", len(pendingEvents))
 
 	successCount := 0
-	queuedCount := 0
-	failedEvents := []uuid.UUID{}
+	skippedCount := 0
+	failedEvents := []map[string]any{}
 
-	// Step 2: Extract event IDs
-	eventIDs := make([]uuid.UUID, len(pendingEvents))
-	for i, event := range pendingEvents {
-		eventIDs[i] = uuid.UUID(event.ID.Bytes)
-		hr.logger.Info("Event ready for assignment",
-			"event_id", eventIDs[i],
+	// Process each event directly
+	for _, event := range pendingEvents {
+		eventID := uuid.UUID(event.ID.Bytes)
+
+		hr.logger.Info("Processing event assignment",
+			"event_id", eventID,
 			"title", event.Title,
 			"assignment_date", event.AssignmentDate.Time)
 
-		// Step 3: Atomically update status to 'queued'
-		// This prevents other instances from processing the same events
-		// Only events still in 'pending' status will be updated
-		// CRITICAL FIX: The query now returns the updated event, or error if already queued
-		updatedEvent, err := hr.queries.UpdateEventStatusToQueued(ctx, event.ID)
+		// Process with 30-second timeout
+		processCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := hr.ProcessEventAssignment(processCtx, eventID)
+		cancel()
+
 		if err != nil {
-			// Check if this is a "no rows updated" error (event already queued by another instance)
-			if err.Error() == "no rows in result set" || strings.Contains(err.Error(), "no rows") {
-				hr.logger.Info("Event already queued by another instance, skipping",
-					"event_id", eventIDs[i],
+			// Check if event was already processed by checking the error message
+			if strings.Contains(err.Error(), "not in 'pending' status") {
+				hr.logger.Info("Event already processed, skipping",
+					"event_id", eventID,
 					"title", event.Title)
-				// This is OK - another instance is handling it
-				// Don't count as queued by us, but don't fail either
+				skippedCount++
 				continue
 			}
 
-			// Actual database error occurred
-			hr.logger.Error("Failed to update event status to queued",
-				"event_id", eventIDs[i],
+			// Actual processing error
+			hr.logger.Error("Failed to process event assignment",
+				"event_id", eventID,
+				"title", event.Title,
 				"error", err)
-			hr.serverError(w, r, err)
-			return
-		}
-
-		queuedCount++
-		hr.logger.Info("Successfully marked event as queued by this instance",
-			"event_id", updatedEvent.ID.String(),
-			"title", updatedEvent.Title)
-
-		// Step 4: Publish each event to RabbitMQ for processing
-		message := EventAssignmentMessage{
-			EventID: event.ID.Bytes,
-		}
-
-		payload, err := json.Marshal(message)
-		if err != nil {
-			hr.logger.Error("Failed to marshal event assignment message",
-				"event_id", event.ID,
-				"error", err)
-			failedEvents = append(failedEvents, event.ID.Bytes)
+			failedEvents = append(failedEvents, map[string]any{
+				"event_id": eventID,
+				"title":    event.Title,
+				"error":    err.Error(),
+			})
 			continue
 		}
 
-		// Publish to RabbitMQ event assignment queue
-		err = hr.rabbitClient.PublishEventAssignment(ctx, payload)
-		if err != nil {
-			hr.logger.Error("Failed to publish event assignment to RabbitMQ",
-				"event_id", event.ID,
-				"error", err)
-			failedEvents = append(failedEvents, event.ID.Bytes)
-			continue
-		}
-
-		hr.logger.Info("Published event assignment to RabbitMQ",
-			"event_id", event.ID,
-			"title", event.Title)
 		successCount++
+		hr.logger.Info("Successfully processed event assignment",
+			"event_id", eventID,
+			"title", event.Title)
 	}
 
-	// Step 5: Return response
+	// Return response
 	responseData := map[string]any{
 		"events_found":     len(pendingEvents),
-		"events_queued":    queuedCount,
-		"events_published": successCount,
+		"events_processed": successCount,
+		"events_skipped":   skippedCount,
 	}
 
 	if len(failedEvents) > 0 {
 		responseData["failed_events"] = failedEvents
-		hr.logger.Warn("Some events failed to publish to RabbitMQ", "count", len(failedEvents))
 	}
 
 	response.JSON(w, response.JSONResponseParameters{
@@ -147,30 +114,37 @@ func (hr *HandlerRepo) StartPendingEventsHandler(w http.ResponseWriter, r *http.
 }
 
 // ProcessEventAssignment processes a single event's guild-to-room assignment.
-// This is called by the RabbitMQ consumer when it receives an EventAssignmentMessage.
+// This is called directly by StartPendingEventsHandler with a 30-second timeout.
 //
-// Flow:
-// 1. Fetch event and verify it's in 'queued' status
+// Flow (all within a single transaction):
+// 1. Atomically update event status: pending → active (prevents duplicate processing)
 // 2. Get all participating guilds
 // 3. Get all rooms for the event
 // 4. Assign guilds to rooms using round-robin distribution
 // 5. Assign Code Problems and score distribution to each Code Problem to Event
-// 6. Update event status to 'active'
+//
+// If any step fails, the transaction is rolled back and event remains 'pending'.
 func (hr *HandlerRepo) ProcessEventAssignment(ctx context.Context, eventID uuid.UUID) error {
 	hr.logger.Info("Processing event assignment", "event_id", eventID)
 
-	// Fetch the event
-	event, err := hr.queries.GetEventByID(ctx, toPgtypeUUID(eventID))
+	// Start transaction for atomic processing
+	tx, err := hr.db.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to fetch event: %w", err)
+		return fmt.Errorf("failed to start transaction: %w", err)
 	}
+	defer tx.Rollback(ctx)
 
-	// Verify event is in correct status
-	if event.Status != store.EventStatusQueued {
-		hr.logger.Warn("Event is not in 'queued' status, skipping",
-			"event_id", eventID,
-			"status", event.Status)
-		return nil
+	qtx := hr.queries.WithTx(tx)
+
+	// Atomically update status to 'active' (only if still 'pending')
+	// This prevents duplicate processing if another cron cycle hits a different instance
+	event, err := qtx.UpdateEventStatusToActive(ctx, toPgtypeUUID(eventID))
+	if err != nil {
+		// Check if this is a "no rows" error (event already processed)
+		if err.Error() == "no rows in result set" || strings.Contains(err.Error(), "no rows") {
+			return fmt.Errorf("event is not in 'pending' status, likely already processed")
+		}
+		return fmt.Errorf("failed to update event status: %w", err)
 	}
 
 	hr.logger.Info("Starting guild assignment for event",
@@ -178,23 +152,22 @@ func (hr *HandlerRepo) ProcessEventAssignment(ctx context.Context, eventID uuid.
 		"title", event.Title)
 
 	// Get all participating guilds
-	participants, err := hr.queries.GetEventParticipants(ctx, event.ID)
+	participants, err := qtx.GetEventParticipants(ctx, event.ID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch event participants: %w", err)
 	}
 
 	if len(participants) == 0 {
 		hr.logger.Warn("No participants found for event", "event_id", eventID)
-		// Still mark as active even with no participants
-		err = hr.queries.UpdateEventStatusToActive(ctx, event.ID)
-		if err != nil {
-			return fmt.Errorf("failed to update event status to active: %w", err)
+		// Event is already marked as active, just commit and return
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit transaction: %w", err)
 		}
 		return nil
 	}
 
 	// Get all rooms for this event
-	rooms, err := hr.queries.GetRoomsByEvent(ctx, event.ID)
+	rooms, err := qtx.GetRoomsByEvent(ctx, event.ID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch rooms: %w", err)
 	}
@@ -218,14 +191,6 @@ func (hr *HandlerRepo) ProcessEventAssignment(ctx context.Context, eventID uuid.
 		"total_rooms", len(rooms),
 		"guilds_per_room", guildsPerRoom)
 
-	// Use a transaction for atomic room assignment
-	tx, err := hr.db.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to start transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	qtx := hr.queries.WithTx(tx)
-
 	// Assign guilds to rooms (round-robin distribution)
 	roomIndex := 0
 	for i, participant := range participants {
@@ -247,21 +212,15 @@ func (hr *HandlerRepo) ProcessEventAssignment(ctx context.Context, eventID uuid.
 			"room_name", rooms[roomIndex].Name)
 	}
 
-	// Step 5: Assign Code Problems and score distribution to Event
+	// Assign Code Problems and score distribution to Event
 	err = hr.assignCodeProblemsToEvent(ctx, qtx, event)
 	if err != nil {
 		return fmt.Errorf("failed to assign code problems to event: %w", err)
 	}
 
-	// Update event status to 'active'
-	err = qtx.UpdateEventStatusToActive(ctx, event.ID)
-	if err != nil {
-		return fmt.Errorf("failed to update event status to active: %w", err)
-	}
-
-	// Commit the transaction
+	// Commit the transaction (event is already marked as 'active' at the beginning)
 	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit guild assignments: %w", err)
+		return fmt.Errorf("failed to commit event assignment: %w", err)
 	}
 
 	hr.logger.Info("Successfully completed event assignment",

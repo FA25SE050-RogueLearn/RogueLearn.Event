@@ -3191,41 +3191,18 @@ func (q *Queries) UpdateEventRequestStatus(ctx context.Context, arg UpdateEventR
 	return i, err
 }
 
-const updateEventStatusToActive = `-- name: UpdateEventStatusToActive :exec
+const updateEventStatusToActive = `-- name: UpdateEventStatusToActive :one
 UPDATE events
 SET status = 'active'
-WHERE id = $1
-`
-
-// Mark event as active after guild assignment is complete
-func (q *Queries) UpdateEventStatusToActive(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, updateEventStatusToActive, id)
-	return err
-}
-
-const updateEventStatusToCompleted = `-- name: UpdateEventStatusToCompleted :exec
-UPDATE events
-SET status = 'completed'
-WHERE id = $1
-`
-
-// Mark event as completed
-func (q *Queries) UpdateEventStatusToCompleted(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, updateEventStatusToCompleted, id)
-	return err
-}
-
-const updateEventStatusToQueued = `-- name: UpdateEventStatusToQueued :one
-UPDATE events
-SET status = 'queued'
-WHERE id = $1 AND status = 'pending'  -- Only update if still pending
+WHERE id = $1 AND status = 'pending'
 RETURNING id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date
 `
 
-// Atomically mark events as 'queued' to prevent duplicate processing
-// Returns the updated event if successful, or NULL if already queued by another instance
-func (q *Queries) UpdateEventStatusToQueued(ctx context.Context, id pgtype.UUID) (Event, error) {
-	row := q.db.QueryRow(ctx, updateEventStatusToQueued, id)
+// Atomically mark event as 'active' and prevent duplicate processing
+// Only updates if the event is still in 'pending' status
+// Returns the updated event if successful, or error if already processed
+func (q *Queries) UpdateEventStatusToActive(ctx context.Context, id pgtype.UUID) (Event, error) {
+	row := q.db.QueryRow(ctx, updateEventStatusToActive, id)
 	var i Event
 	err := row.Scan(
 		&i.ID,
@@ -3244,6 +3221,18 @@ func (q *Queries) UpdateEventStatusToQueued(ctx context.Context, id pgtype.UUID)
 		&i.AssignmentDate,
 	)
 	return i, err
+}
+
+const updateEventStatusToCompleted = `-- name: UpdateEventStatusToCompleted :exec
+UPDATE events
+SET status = 'completed'
+WHERE id = $1
+`
+
+// Mark event as completed
+func (q *Queries) UpdateEventStatusToCompleted(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, updateEventStatusToCompleted, id)
+	return err
 }
 
 const updateGuildLeaderboardEntry = `-- name: UpdateGuildLeaderboardEntry :one
