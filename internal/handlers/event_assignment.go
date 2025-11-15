@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
@@ -69,16 +70,31 @@ func (hr *HandlerRepo) StartPendingEventsHandler(w http.ResponseWriter, r *http.
 		// Step 3: Atomically update status to 'queued'
 		// This prevents other instances from processing the same events
 		// Only events still in 'pending' status will be updated
-		err := hr.queries.UpdateEventStatusToQueued(ctx, event.ID)
+		// CRITICAL FIX: The query now returns the updated event, or error if already queued
+		updatedEvent, err := hr.queries.UpdateEventStatusToQueued(ctx, event.ID)
 		if err != nil {
+			// Check if this is a "no rows updated" error (event already queued by another instance)
+			if err.Error() == "no rows in result set" || strings.Contains(err.Error(), "no rows") {
+				hr.logger.Info("Event already queued by another instance, skipping",
+					"event_id", eventIDs[i],
+					"title", event.Title)
+				// This is OK - another instance is handling it
+				// Don't count as queued by us, but don't fail either
+				continue
+			}
+
+			// Actual database error occurred
 			hr.logger.Error("Failed to update event status to queued",
 				"event_id", eventIDs[i],
 				"error", err)
 			hr.serverError(w, r, err)
 			return
 		}
+
 		queuedCount++
-		hr.logger.Info("Successfully marked events as queued", "event_id", event.ID.String())
+		hr.logger.Info("Successfully marked event as queued by this instance",
+			"event_id", updatedEvent.ID.String(),
+			"title", updatedEvent.Title)
 
 		// Step 4: Publish each event to RabbitMQ for processing
 		message := EventAssignmentMessage{
