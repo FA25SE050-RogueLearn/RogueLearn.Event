@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/events"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // SSE Event Handler for room's leaderboard
@@ -77,6 +79,44 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	hr.logger.Info("SSE connection established", "connected_player_id", connectedPlayerID, "room_id", roomID)
+
+	// Get event details to send initial time remaining
+	event, err := hr.queries.GetEventByID(r.Context(), pgtype.UUID{Bytes: eventID, Valid: true})
+	if err != nil {
+		hr.logger.Error("Failed to get event details", "event_id", eventID, "error", err)
+		http.Error(w, "failed to get event details", http.StatusInternalServerError)
+		return
+	}
+
+	// Send initial time remaining to client
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	remaining := time.Until(event.EndDate.Time)
+	if remaining > 0 {
+		initialTime := map[string]interface{}{
+			"event_id":       eventID.String(),
+			"end_date":       event.EndDate.Time.Format(time.RFC3339),
+			"seconds_left":   int64(remaining.Seconds()),
+			"formatted_time": formatDuration(remaining),
+			"server_time":    time.Now().Format(time.RFC3339),
+		}
+
+		data, err := json.Marshal(initialTime)
+		if err != nil {
+			hr.logger.Error("Failed to marshal initial time", "error", err)
+		} else {
+			fmt.Fprintf(w, "event: initial_time\ndata: %s\n\n", data)
+			flusher.Flush()
+			hr.logger.Info("Sent initial time to player",
+				"connected_player_id", connectedPlayerID,
+				"seconds_left", int64(remaining.Seconds()),
+				"formatted", formatDuration(remaining))
+		}
+	}
 
 	// player joined event
 	roomHub.Events <- events.PlayerJoined{PlayerID: connectedPlayerID, RoomID: roomID}
@@ -222,4 +262,14 @@ func getRequestPlayerIDAndEventID(r *http.Request) (playerID, eventID uuid.UUID,
 	}
 
 	return playerIDUID, eventIDUID, nil
+}
+
+// formatDuration formats a duration as HH:MM:SS
+func formatDuration(d time.Duration) string {
+	totalSeconds := int(d.Seconds())
+	hours := totalSeconds / 3600
+	minutes := (totalSeconds % 3600) / 60
+	seconds := totalSeconds % 60
+
+	return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 }

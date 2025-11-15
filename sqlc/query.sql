@@ -691,7 +691,8 @@ WHERE id = $1 AND status = 'pending'
 RETURNING *;
 
 -- name: UpdateEventStatusToCompleted :exec
--- Mark event as completed
+-- Atomically mark event as 'completed' (only if still 'active')
+-- Used by event expiry timer - atomic update prevents duplicate completion
 UPDATE events
 SET status = 'completed'
-WHERE id = $1;
+WHERE id = $1 AND status = 'active';

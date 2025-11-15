@@ -3226,10 +3226,11 @@ func (q *Queries) UpdateEventStatusToActive(ctx context.Context, id pgtype.UUID)
 const updateEventStatusToCompleted = `-- name: UpdateEventStatusToCompleted :exec
 UPDATE events
 SET status = 'completed'
-WHERE id = $1
+WHERE id = $1 AND status = 'active'
 `
 
-// Mark event as completed
+// Atomically mark event as 'completed' (only if still 'active')
+// Used by event expiry timer - atomic update prevents duplicate completion
 func (q *Queries) UpdateEventStatusToCompleted(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, updateEventStatusToCompleted, id)
 	return err

@@ -174,7 +174,7 @@ func (hr *HandlerRepo) CreateEventHandler(w http.ResponseWriter, r *http.Request
 func (hr *HandlerRepo) GetMyEventRequestsHandler(w http.ResponseWriter, r *http.Request) {
 	// In a real application, this would come from JWT claims or session.
 	// For this example, we'll use a query parameter.
-	guildIDStr := r.URL.Query().Get("guild_id")
+	guildIDStr := chi.URLParam(r, "guild_id")
 	if guildIDStr == "" {
 		hr.badRequest(w, r, errors.New("guild_id query parameter is required"))
 		return

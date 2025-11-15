@@ -24,21 +24,35 @@ var (
 func (hr *HandlerRepo) AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
-		hr.logger.Info("Header Got", "header", authHeader)
-		if authHeader == "" {
-			hr.logger.Warn("Missing Authorization header")
+		tokenStr := ""
+
+		// 1. Try to get token from Authorization header (standard for most API calls)
+		if authHeader != "" {
+			headerParts := strings.Split(authHeader, " ")
+			if len(headerParts) == 2 && strings.ToLower(headerParts[0]) == "bearer" {
+				tokenStr = headerParts[1]
+			} else {
+				hr.logger.Warn("Malformed Authorization header", "header", authHeader)
+				hr.unauthorized(w, r)
+				return
+			}
+		}
+
+		// 2. If not in header, fall back to query parameter (for SSE/EventSource)
+		if tokenStr == "" {
+			tokenStr = r.URL.Query().Get("auth_token")
+			if tokenStr != "" {
+				hr.logger.Info("Authenticating via 'auth_token' query parameter (likely SSE).")
+			}
+		}
+
+		// 3. If still no token, reject the request
+		if tokenStr == "" {
+			hr.logger.Warn("Missing Authorization token in header or query parameter.")
 			hr.unauthorized(w, r)
 			return
 		}
 
-		headerParts := strings.Split(authHeader, " ")
-		if len(headerParts) != 2 || strings.ToLower(headerParts[0]) != "bearer" {
-			hr.logger.Warn("Malformed Authorization header", "header", authHeader)
-			hr.unauthorized(w, r)
-			return
-		}
-
-		tokenStr := headerParts[1]
 		// Verify token with full validation (signature, issuer, audience, expiration)
 		claims, err := hr.jwtParser.VerifyToken(tokenStr)
 		if err != nil {

@@ -18,6 +18,7 @@ const (
 	COMPILATION_TEST           EventType = "COMPILATION_TEST"
 	LEADERBOARD_UPDATED        EventType = "LEADERBOARD_UPDATED"
 	GUILD_LEADERBOARD_UPDATED  EventType = "GUILD_LEADERBOARD_UPDATED"
+	EVENT_EXPIRED              EventType = "EVENT_EXPIRED"
 )
 
 // Event wrapper for the listener
@@ -71,4 +72,10 @@ type PlayerLeft struct {
 
 type RoomDeleted struct {
 	RoomID uuid.UUID
+}
+
+type EventExpired struct {
+	EventID     uuid.UUID `json:"event_id"`
+	CompletedAt time.Time `json:"completed_at"`
+	Message     string    `json:"message"`
 }

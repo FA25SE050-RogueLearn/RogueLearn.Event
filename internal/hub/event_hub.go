@@ -35,6 +35,7 @@ type EventHub struct {
 	queries       *store.Queries
 	db            *pgxpool.Pool // Database pool for transactions
 	Rooms         map[uuid.UUID]*RoomHub // roomID -> roomManager
+	EventRooms    map[uuid.UUID][]uuid.UUID // eventID -> []roomID
 	Mu            sync.RWMutex
 	leaderboardMu sync.Mutex // Protects leaderboard calculation
 
@@ -73,6 +74,7 @@ func NewEventHub(db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, 
 		queries:         queries,
 		db:              db,
 		Rooms:           make(map[uuid.UUID]*RoomHub),
+		EventRooms:      make(map[uuid.UUID][]uuid.UUID), // NEW!
 		GuildUpdateChan: make(chan uuid.UUID, 100), // Buffered channel
 		EventListeners:  make(map[uuid.UUID]map[uuid.UUID]chan<- events.SseEvent),
 		rabbitClient:    rabbitClient,
@@ -80,6 +82,13 @@ func NewEventHub(db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, 
 	}
 
 	go e.listenForAMQPEvents() // Start the central RabbitMQ listener
+
+	// Recover timers for active events on startup
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		e.recoverActiveEvents(ctx)
+	}()
 
 	supabaseEventID, _ := uuid.Parse("e88e5761-e0fa-409d-baad-057edad1496a")
 	e.EventListeners[supabaseEventID] = make(map[uuid.UUID]chan<- events.SseEvent)
@@ -106,6 +115,133 @@ func NewEventHub(db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, 
 	// --------- remove on production ---------
 
 	return &e
+}
+
+// ScheduleEventExpiry schedules a one-time timer to complete the event when it expires.
+// Uses time.AfterFunc to fire exactly at the event's end_date.
+// When the timer fires, it calls completeEvent which:
+// - Atomically updates the event status to 'completed' in the database
+// - Publishes EventExpired to RabbitMQ so all instances receive it
+func (e *EventHub) ScheduleEventExpiry(eventID uuid.UUID, endDate time.Time) {
+	duration := time.Until(endDate)
+
+	if duration <= 0 {
+		e.logger.Warn("Event end date is in the past, not scheduling timer",
+			"event_id", eventID,
+			"end_date", endDate,
+			"now", time.Now())
+		return
+	}
+
+	e.logger.Info("Scheduling event expiry timer",
+		"event_id", eventID,
+		"end_date", endDate,
+		"duration", duration)
+
+	// Schedule one-time timer
+	time.AfterFunc(duration, func() {
+		e.logger.Info("Event expiry timer fired", "event_id", eventID)
+		e.completeEvent(eventID)
+	})
+}
+
+// completeEvent atomically marks an event as completed and broadcasts the expiry message.
+// This should only be called by the timer (ScheduleEventExpiry).
+//
+// Flow:
+// 1. Atomically update event status: active → completed (only one instance succeeds)
+// 2. Publish EventExpired to RabbitMQ fanout exchange
+// 3. All instances receive the message and broadcast to their connected players
+func (e *EventHub) completeEvent(eventID uuid.UUID) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	e.logger.Info("Attempting to complete event", "event_id", eventID)
+
+	// Atomic update: only succeeds if event is 'active'
+	// This prevents duplicate completion if multiple instances fire simultaneously
+	err := e.queries.UpdateEventStatusToCompleted(ctx, toPgtypeUUID(eventID))
+	if err != nil {
+		e.logger.Error("Failed to update event status to completed",
+			"event_id", eventID,
+			"error", err)
+		// If update fails (event already completed by another instance), don't publish to RabbitMQ
+		return
+	}
+
+	e.logger.Info("Successfully marked event as completed in database", "event_id", eventID)
+
+	// Create EventExpired message
+	eventExpired := events.EventExpired{
+		EventID:     eventID,
+		CompletedAt: time.Now(),
+		Message:     "Event has ended. Thank you for participating!",
+	}
+
+	sseEvent := events.SseEvent{
+		EventType: events.EVENT_EXPIRED,
+		Data:      eventExpired,
+	}
+
+	// Publish to RabbitMQ so ALL instances receive the message
+	payload, err := json.Marshal(sseEvent)
+	if err != nil {
+		e.logger.Error("Failed to marshal EventExpired for RabbitMQ",
+			"event_id", eventID,
+			"error", err)
+		return
+	}
+
+	routingKey := fmt.Sprintf("event.%s", eventID)
+	err = e.rabbitClient.Publish(ctx, rabbitmq.SseEventsExchange, routingKey, payload)
+	if err != nil {
+		e.logger.Error("Failed to publish EventExpired to RabbitMQ",
+			"event_id", eventID,
+			"error", err)
+		return
+	}
+
+	e.logger.Info("Successfully published EventExpired to RabbitMQ",
+		"event_id", eventID,
+		"routing_key", routingKey)
+}
+
+// recoverActiveEvents queries for all active events on startup and re-schedules their expiry timers.
+// This ensures that if the service restarts, events continue to expire correctly.
+//
+// Called by: NewEventHub() in a goroutine with 30-second timeout
+func (e *EventHub) recoverActiveEvents(ctx context.Context) {
+	e.logger.Info("Recovering active events and scheduling expiry timers")
+
+	// Query all active events from database
+	activeEvents, err := e.queries.GetActiveEvents(ctx)
+	if err != nil {
+		e.logger.Error("Failed to query active events for recovery", "error", err)
+		return
+	}
+
+	if len(activeEvents) == 0 {
+		e.logger.Info("No active events to recover")
+		return
+	}
+
+	e.logger.Info("Found active events to recover", "count", len(activeEvents))
+
+	// Schedule expiry timer for each active event
+	for _, event := range activeEvents {
+		eventID := uuid.UUID(event.ID.Bytes)
+		endDate := event.EndDate.Time
+
+		e.logger.Info("Recovering event",
+			"event_id", eventID,
+			"title", event.Title,
+			"end_date", endDate)
+
+		// Schedule the timer
+		e.ScheduleEventExpiry(eventID, endDate)
+	}
+
+	e.logger.Info("Event recovery complete", "recovered_count", len(activeEvents))
 }
 
 func newRoomHub(eventID, roomId uuid.UUID, db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, guildUpdateChan chan<- uuid.UUID, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client) *RoomHub {
@@ -173,7 +309,8 @@ func (e *EventHub) listenForAMQPEvents() {
 					"event_type", sseEvent.EventType)
 			}
 		case "event":
-			e.dispatchEventToEvent(entityID, sseEvent)
+			// Handle event-level messages (including EventExpired)
+			e.handleEventMessage(entityID, sseEvent)
 		}
 	}
 }
@@ -269,10 +406,40 @@ func (h *EventHub) GetOrCreateRoomHub(ctx context.Context, roomID uuid.UUID) *Ro
 	// Add to in-memory map
 	h.Rooms[roomID] = newRoomHub
 
+	// NEW: Register in EventRooms map
+	if _, exists := h.EventRooms[eventID]; !exists {
+		h.EventRooms[eventID] = []uuid.UUID{}
+	}
+
+	// Check if roomID already in slice (shouldn't happen, but safety check)
+	alreadyRegistered := false
+	for _, rid := range h.EventRooms[eventID] {
+		if rid == roomID {
+			alreadyRegistered = true
+			break
+		}
+	}
+
+	if !alreadyRegistered {
+		h.EventRooms[eventID] = append(h.EventRooms[eventID], roomID)
+	}
+
 	// Start the RoomHub's event processing goroutine
 	go newRoomHub.Start()
 
 	h.logger.Info("Successfully created and started RoomHub", "room_id", roomID)
+
+	// Schedule event expiry timer if event is active (lazy-loading recovery)
+	// This ensures that if a room is lazy-loaded on a new instance,
+	// the expiry timer is still scheduled correctly
+	event, err := h.queries.GetEventByID(ctx, pgtype.UUID{Bytes: eventID, Valid: true})
+	if err == nil && event.Status == "active" {
+		h.logger.Info("Lazy-loaded room for active event, scheduling expiry timer",
+			"room_id", roomID,
+			"event_id", eventID,
+			"end_date", event.EndDate.Time)
+		h.ScheduleEventExpiry(eventID, event.EndDate.Time)
+	}
 
 	return newRoomHub
 }
@@ -281,7 +448,20 @@ func (e *EventHub) CreateRoom(eventID, roomID uuid.UUID, queries *store.Queries)
 	r := newRoomHub(eventID, roomID, e.db, queries, e.logger, e.GuildUpdateChan, e.rabbitClient, e.executorClient)
 	e.Mu.Lock()
 	e.Rooms[roomID] = r
+
+	// NEW: Register room in EventRooms map
+	if _, exists := e.EventRooms[eventID]; !exists {
+		e.EventRooms[eventID] = []uuid.UUID{}
+	}
+	e.EventRooms[eventID] = append(e.EventRooms[eventID], roomID)
+
 	e.Mu.Unlock()
+
+	e.logger.Info("Room created and registered to event",
+		"room_id", roomID,
+		"event_id", eventID,
+		"total_rooms_in_event", len(e.EventRooms[eventID]))
+
 	go r.Start() // Start RoomHub
 	return r
 }
@@ -402,6 +582,64 @@ func (e *EventHub) Start() {
 	}
 }
 
+// handleEventMessage handles event-level messages received from RabbitMQ
+func (e *EventHub) handleEventMessage(eventID uuid.UUID, sseEvent events.SseEvent) {
+	switch sseEvent.EventType {
+	case events.EVENT_EXPIRED:
+		// EventExpired message received from RabbitMQ
+		// This is broadcast by the ONE instance that successfully updated the DB
+		// ALL instances receive it and broadcast to their connected players
+		e.logger.Info("Received EventExpired from RabbitMQ", "event_id", eventID)
+
+		// Broadcast to all rooms in this event
+		e.Mu.RLock()
+		roomIDs, exists := e.EventRooms[eventID]
+		e.Mu.RUnlock()
+
+		if !exists || len(roomIDs) == 0 {
+			e.logger.Warn("No rooms found for event", "event_id", eventID)
+		} else {
+			e.logger.Info("Broadcasting EventExpired to rooms",
+				"event_id", eventID,
+				"room_count", len(roomIDs))
+
+			affectedRooms := 0
+			for _, roomID := range roomIDs {
+				e.Mu.RLock()
+				roomHub, exists := e.Rooms[roomID]
+				e.Mu.RUnlock()
+
+				if !exists {
+					e.logger.Warn("Room not found in memory",
+						"room_id", roomID,
+						"event_id", eventID)
+					continue
+				}
+
+				// Non-blocking send to room's event channel
+				select {
+				case roomHub.Events <- sseEvent.Data:
+					affectedRooms++
+				default:
+					e.logger.Warn("Room event channel full, skipping",
+						"room_id", roomID)
+				}
+			}
+
+			e.logger.Info("EventExpired broadcast complete",
+				"event_id", eventID,
+				"rooms_notified", affectedRooms)
+		}
+
+		// Also broadcast to event-level spectators
+		e.dispatchEventToEvent(eventID, sseEvent)
+
+	default:
+		// Other event-level messages (guild leaderboard, etc.)
+		e.dispatchEventToEvent(eventID, sseEvent)
+	}
+}
+
 // dispatchEventToEvent sends an SSE event to all listeners for a specific event.
 func (e *EventHub) dispatchEventToEvent(eventID uuid.UUID, sseEvent events.SseEvent) {
 	e.EventListenersMu.RLock()
@@ -455,6 +693,33 @@ func (r *RoomHub) Start() {
 			if err := r.processRoomDeleted(e); err != nil {
 				r.logger.Error("failed to process room deleted event", "error", err)
 			}
+
+		case events.EventExpired:
+			// Event has expired, broadcast to all connected players
+			r.logger.Info("Event expired, broadcasting to room players",
+				"event_id", e.EventID,
+				"room_id", r.RoomID)
+
+			sseEvent := events.SseEvent{
+				EventType: events.EVENT_EXPIRED,
+				Data:      e,
+			}
+
+			r.Mu.RLock()
+			for playerID, ch := range r.Listerners {
+				select {
+				case ch <- sseEvent:
+					r.logger.Info("Sent event expired to player", "player_id", playerID)
+				default:
+					r.logger.Warn("Player channel full, could not send event expired",
+						"player_id", playerID)
+				}
+			}
+			r.Mu.RUnlock()
+
+			r.logger.Info("Event expired broadcast complete",
+				"room_id", r.RoomID,
+				"players_notified", len(r.Listerners))
 		}
 	}
 }
