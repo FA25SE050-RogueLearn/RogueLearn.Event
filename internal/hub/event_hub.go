@@ -680,23 +680,61 @@ func (r *RoomHub) processSolutionResult(event events.SolutionResult) error {
 		return nil
 	}
 
-	err := r.queries.AddRoomPlayerScore(ctx, store.AddRoomPlayerScoreParams{
+	// CRITICAL FIX: Wrap score update and leaderboard calculation in a single transaction
+	// This prevents race conditions when multiple instances process submissions simultaneously
+	r.logger.Info("Starting atomic score update and leaderboard calculation",
+		"room_id", r.RoomID,
+		"player_id", event.SolutionSubmitted.PlayerID,
+		"score", event.Score)
+
+	// Begin transaction
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		r.logger.Error("Failed to begin transaction for score update",
+			"room_id", r.RoomID,
+			"error", err)
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Create query runner that executes within this transaction
+	qtx := r.queries.WithTx(tx)
+
+	// Update player score within transaction
+	err = qtx.AddRoomPlayerScore(ctx, store.AddRoomPlayerScoreParams{
 		PointsToAdd: int32(event.Score),
 		UserID:      toPgtypeUUID(event.SolutionSubmitted.PlayerID),
 		RoomID:      toPgtypeUUID(event.SolutionSubmitted.RoomID),
 	})
-
 	if err != nil {
-		r.logger.Error("failed to add score",
-			"err", err)
-		return err
+		r.logger.Error("Failed to add score within transaction",
+			"room_id", r.RoomID,
+			"error", err)
+		return fmt.Errorf("failed to add score: %w", err)
 	}
 
-	// Recalculate leaderboard after score update
-	if err := r.calculateLeaderboard(ctx); err != nil {
-		r.logger.Error("failed to calculate leaderboard after solution result", "error", err)
-		// non-fatal, but should be monitored
+	// Calculate leaderboard within SAME transaction
+	// The CalculateRoomLeaderboard query uses SELECT FOR UPDATE to lock rows
+	err = qtx.CalculateRoomLeaderboard(ctx, toPgtypeUUID(r.RoomID))
+	if err != nil {
+		r.logger.Error("Failed to calculate leaderboard within transaction",
+			"room_id", r.RoomID,
+			"error", err)
+		return fmt.Errorf("failed to calculate leaderboard: %w", err)
 	}
+
+	// Commit the transaction atomically
+	err = tx.Commit(ctx)
+	if err != nil {
+		r.logger.Error("Failed to commit score and leaderboard transaction",
+			"room_id", r.RoomID,
+			"error", err)
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	r.logger.Info("Successfully committed atomic score update and leaderboard calculation",
+		"room_id", r.RoomID,
+		"player_id", event.SolutionSubmitted.PlayerID)
 
 	roomEntries, err := r.getRoomLeaderboardEntries(ctx)
 	if err != nil {
