@@ -13,7 +13,7 @@ func (app *Application) routes() http.Handler {
 	// Configure CORS with security in mind
 	// In production, you should configure allowed origins via environment variables
 	corsHandler := cors.New(cors.Options{
-		AllowedOrigins: []string{},
+		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{
 			"GET",
 			"POST",
@@ -22,7 +22,7 @@ func (app *Application) routes() http.Handler {
 			"DELETE",
 			"OPTIONS",
 		},
-		AllowedHeaders: []string{},
+		AllowedHeaders: []string{"*"},
 		ExposedHeaders: []string{
 			"Link",
 		},
@@ -78,12 +78,7 @@ func (app *Application) routes() http.Handler {
 		// Public routes for problems
 		r.Get("/", app.handlers.GetProblemsHandler)
 		r.Get("/{problem_id}", app.handlers.GetProblemHandler)
-
-		// Auth-protected routes for problem details
-		r.Group(func(r chi.Router) {
-			r.Use(app.handlers.AuthMiddleware)
-			r.Get("/{problem_id}/details", app.handlers.GetProblemDetails)
-		})
+		r.Get("/{problem_id}/details", app.handlers.GetProblemDetails)
 	})
 
 	mux.Route("/tags", func(r chi.Router) {

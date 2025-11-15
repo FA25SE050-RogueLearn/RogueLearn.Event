@@ -420,6 +420,17 @@ INSERT INTO submissions (user_id, code_problem_id, language_id, room_id, code_su
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
+-- name: CheckIfProblemAlreadySolved :one
+-- Check if a player has already solved a problem in a specific room
+-- Returns the submission if it exists and is accepted, otherwise returns error
+SELECT id, status, submitted_at
+FROM submissions
+WHERE user_id = $1
+  AND code_problem_id = $2
+  AND room_id = $3
+  AND status = 'accepted'
+LIMIT 1;
+
 -- name: GetSubmissionByID :one
 SELECT * FROM submissions WHERE id = $1;
 
@@ -503,13 +514,19 @@ ORDER BY le1.rank ASC;
 -- This query uses SELECT FOR UPDATE to lock rows and prevent race conditions
 -- across multiple instances when calculating leaderboard rankings.
 -- The lock is held until the transaction commits, ensuring atomicity.
-WITH ranked_players AS (
-  SELECT
-    user_id,
-    RANK() OVER (ORDER BY score DESC, joined_at ASC) as new_place
+WITH locked_players AS (
+  -- First, lock the rows without window functions
+  SELECT user_id, score, joined_at
   FROM room_players
   WHERE room_id = $1
   FOR UPDATE  -- Lock these rows to prevent concurrent modifications
+),
+ranked_players AS (
+  -- Then, calculate rankings using window function (no FOR UPDATE here)
+  SELECT
+    user_id,
+    RANK() OVER (ORDER BY score DESC, joined_at ASC) as new_place
+  FROM locked_players
 )
 UPDATE room_players rp
 SET place = rp_ranked.new_place

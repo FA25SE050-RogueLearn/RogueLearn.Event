@@ -287,17 +287,19 @@ func (hr *HandlerRepo) updateSubmission(ctx context.Context, submissionID pgtype
 
 // SubmitSolutionInRoomHandler creates an event and pass it to the room's channel
 func (hr *HandlerRepo) SubmitInRoomHandler(w http.ResponseWriter, r *http.Request) {
-	// claims, ok := r.Context().Value("asd").(*jwt.UserClaims)
-	// if !ok {
-	// 	// hr.unauthorizedResponse(w, r)
-	// 	return
-	// }
-
-	// get player_id through query param on dev stage.
-	playerIDStr := r.URL.Query().Get("player_id")
-	playerID, err := uuid.Parse(playerIDStr)
+	userClaims, err := GetUserClaims(r.Context())
 	if err != nil {
-		hr.badRequest(w, r, errors.New("invalid user ID in token"))
+		hr.logger.Error("failed to get user claims", "err", err)
+		hr.badRequest(w, r, err)
+		return
+	}
+
+	hr.logger.Info("userClaims parsed!", "user_claims", *userClaims)
+
+	// get player_id through query param in development stage
+	playerID, err := uuid.Parse(userClaims.GetUserID())
+	if err != nil {
+		hr.badRequest(w, r, errors.New("failed to parse player_id"))
 		return
 	}
 
@@ -327,6 +329,30 @@ func (hr *HandlerRepo) SubmitInRoomHandler(w http.ResponseWriter, r *http.Reques
 		hr.badRequest(w, r, errors.New("invalid problem ID in request body"))
 		return
 	}
+
+	// CRITICAL: Check if player has already solved this problem
+	// Prevent duplicate submissions and point farming
+	existingSolution, err := hr.queries.CheckIfProblemAlreadySolved(r.Context(), store.CheckIfProblemAlreadySolvedParams{
+		UserID:        pgtype.UUID{Bytes: playerID, Valid: true},
+		CodeProblemID: pgtype.UUID{Bytes: problemID, Valid: true},
+		RoomID:        pgtype.UUID{Bytes: roomID, Valid: true},
+	})
+
+	if err == nil {
+		// Problem already solved - return error
+		hr.logger.Info("Player attempted to resubmit already solved problem",
+			"player_id", playerID,
+			"problem_id", problemID,
+			"room_id", roomID,
+			"original_submission_id", existingSolution.ID,
+			"solved_at", existingSolution.SubmittedAt)
+
+		hr.errorMessage(w, r, http.StatusConflict, "You have already solved this problem.", nil)
+
+		return
+	}
+	// If error is "no rows", that's fine - problem not solved yet, continue
+	// Any other error should be logged but not block submission (fail open for availability)
 
 	// Get or create the room hub - supports lazy-loading from database
 	// This ensures submissions work even if the room wasn't pre-loaded on this instance

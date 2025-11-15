@@ -10,35 +10,38 @@ import (
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/events"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // SSE Event Handler for room's leaderboard
 // Send the Room events to connected players
 func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
-	// we will get the playerID through request
-	eventID, roomID, err := getRequestEventIDAndRoomID(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	authToken := r.URL.Query().Get("auth_token")
+	if authToken == "" {
+		hr.unauthorized(w, r)
 		return
 	}
 
-	hr.logger.Info("joined to the room",
-		"event_id", eventID,
-		"room_id", roomID)
-
-	// get from the passed context in production stage, we will get from query in dev stage
-	connectedPlayerIDStr := r.URL.Query().Get("connected_player_id")
-	connectedPlayerID, err := uuid.Parse(connectedPlayerIDStr)
+	userClaims, err := hr.jwtParser.GetUserClaimsFromToken(authToken)
 	if err != nil {
-		hr.logger.Error("failed to parse connectedPlayerID",
-			"err", err)
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	userIDStr := userClaims.GetUserID()
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
 		hr.badRequest(w, r, err)
 		return
 	}
 
 	hr.logger.Info("player join requested",
-		"connected_player_id", connectedPlayerID)
+		"user_id", userID)
+
+	eventID, roomID, err := getRequestEventIDAndRoomID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	// Set http headers required for SSE
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -57,86 +60,47 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// listen for incoming SseEvents
-	listen := make(chan events.SseEvent) // Add buffer to prevent blocking
+	listen := make(chan events.SseEvent, 50) // Buffered channel to prevent blocking during burst events
 
 	// Properly lock when modifying listeners
 	roomHub.Mu.Lock()
 	if roomHub.Listerners == nil {
 		roomHub.Listerners = make(map[uuid.UUID]chan<- events.SseEvent)
 	}
-	roomHub.Listerners[connectedPlayerID] = listen
+	roomHub.Listerners[userID] = listen
 	roomHub.Mu.Unlock()
 
-	defer hr.logger.Info("SSE connection closed", "connected_player_id", connectedPlayerID, "room_id", roomID)
+	defer hr.logger.Info("SSE connection closed", "userID", userID, "room_id", roomID)
 	defer close(listen)
 	defer func() {
 		roomHub.Mu.Lock()
-		delete(roomHub.Listerners, connectedPlayerID)
+		delete(roomHub.Listerners, userID)
 		roomHub.Mu.Unlock()
 		go func() {
-			roomHub.Events <- events.PlayerLeft{PlayerID: connectedPlayerID, RoomID: roomID}
+			roomHub.Events <- events.PlayerLeft{PlayerID: userID, RoomID: roomID}
 		}()
 	}()
 
-	hr.logger.Info("SSE connection established", "connected_player_id", connectedPlayerID, "room_id", roomID)
+	hr.logger.Info("SSE connection established", "userID", userID, "room_id", roomID)
 
-	// Get event details to send initial time remaining
-	event, err := hr.queries.GetEventByID(r.Context(), pgtype.UUID{Bytes: eventID, Valid: true})
-	if err != nil {
-		hr.logger.Error("Failed to get event details", "event_id", eventID, "error", err)
-		http.Error(w, "failed to get event details", http.StatusInternalServerError)
-		return
-	}
-
-	// Send initial time remaining to client
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	remaining := time.Until(event.EndDate.Time)
-	if remaining > 0 {
-		initialTime := map[string]interface{}{
-			"event_id":       eventID.String(),
-			"end_date":       event.EndDate.Time.Format(time.RFC3339),
-			"seconds_left":   int64(remaining.Seconds()),
-			"formatted_time": formatDuration(remaining),
-			"server_time":    time.Now().Format(time.RFC3339),
-		}
-
-		data, err := json.Marshal(initialTime)
-		if err != nil {
-			hr.logger.Error("Failed to marshal initial time", "error", err)
-		} else {
-			fmt.Fprintf(w, "event: initial_time\ndata: %s\n\n", data)
-			flusher.Flush()
-			hr.logger.Info("Sent initial time to player",
-				"connected_player_id", connectedPlayerID,
-				"seconds_left", int64(remaining.Seconds()),
-				"formatted", formatDuration(remaining))
-		}
-	}
-
-	// player joined event
-	roomHub.Events <- events.PlayerJoined{PlayerID: connectedPlayerID, RoomID: roomID}
+	// player joined event - time remaining will be sent after successful join
+	roomHub.Events <- events.PlayerJoined{PlayerID: userID, RoomID: roomID, EventID: eventID}
 
 	for {
 		select {
 		case <-r.Context().Done():
-			hr.logger.Info("SSE client disconnected", "connected_player_id", connectedPlayerID, "room_id", roomID)
-			// player left event
+			hr.logger.Info("SSE client disconnected", "userID", userID, "room_id", roomID)
 			return
 		case event, ok := <-listen:
 			if !ok {
-				hr.logger.Info("SSE client disconnected", "connected_player_id", connectedPlayerID, "room_id", roomID)
+				hr.logger.Info("SSE client disconnected", "userID", userID, "room_id", roomID)
 				return
 			}
 
-			hr.logger.Info("Sending event to player's client", "connected_player_id", connectedPlayerID, "event", event, "room_id", roomID)
+			hr.logger.Info("Sending event to player's client", "userID", userID, "event", event, "room_id", roomID)
 			data, err := json.Marshal(event)
 			if err != nil {
-				hr.logger.Error("failed to marshal SSE event", "error", err, "connected_player_id", connectedPlayerID)
+				hr.logger.Error("failed to marshal SSE event", "error", err, "userID", userID)
 				return // Client is likely gone, so exit
 			}
 
@@ -169,7 +133,7 @@ func (hr *HandlerRepo) SpectateEventHandler(w http.ResponseWriter, r *http.Reque
 
 	// Create a unique ID for this listener and a channel for events
 	clientID := uuid.New()
-	listen := make(chan events.SseEvent, 5)
+	listen := make(chan events.SseEvent, 50) // Buffered channel to prevent blocking during burst events
 
 	// Add listener to the main EventHub
 	hr.eventHub.EventListenersMu.Lock()
@@ -245,23 +209,6 @@ func getRequestEventIDAndRoomID(r *http.Request) (eventID, roomID uuid.UUID, err
 	}
 
 	return eventIDUID, roomIDUID, nil
-}
-
-// getRequestPlayerIdAndRoomId extract player_id and room_id from query params
-func getRequestPlayerIDAndEventID(r *http.Request) (playerID, eventID uuid.UUID, err error) {
-	playerIDStr := r.URL.Query().Get("player_id")
-	eventIDStr := r.URL.Query().Get("event_id")
-	playerIDUID, err := uuid.Parse(playerIDStr)
-	if err != nil {
-		return uuid.UUID{}, uuid.UUID{}, err
-	}
-
-	eventIDUID, err := uuid.Parse(eventIDStr)
-	if err != nil {
-		return uuid.UUID{}, uuid.UUID{}, err
-	}
-
-	return playerIDUID, eventIDUID, nil
 }
 
 // formatDuration formats a duration as HH:MM:SS

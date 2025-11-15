@@ -51,9 +51,10 @@ type SolutionSubmitted struct {
 
 type SolutionResult struct {
 	SolutionSubmitted SolutionSubmitted
-	Score             int
 	Status            JudgeStatus
 	Message           string
+	Score             int32
+	ExecutionTimeMs   string
 }
 
 type LeaderboardUpdated struct {
@@ -63,6 +64,7 @@ type LeaderboardUpdated struct {
 type PlayerJoined struct {
 	PlayerID uuid.UUID
 	RoomID   uuid.UUID
+	EventID  uuid.UUID
 }
 
 type PlayerLeft struct {

@@ -70,13 +70,19 @@ func (q *Queries) CalculateGuildLeaderboard(ctx context.Context, eventID pgtype.
 }
 
 const calculateRoomLeaderboard = `-- name: CalculateRoomLeaderboard :exec
-WITH ranked_players AS (
-  SELECT
-    user_id,
-    RANK() OVER (ORDER BY score DESC, joined_at ASC) as new_place
+WITH locked_players AS (
+  -- First, lock the rows
+  SELECT user_id, score, joined_at
   FROM room_players
   WHERE room_id = $1
   FOR UPDATE  -- Lock these rows to prevent concurrent modifications
+),
+ranked_players AS (
+  -- Then, calculate rankings using window function (no FOR UPDATE here)
+  SELECT
+    user_id,
+    RANK() OVER (ORDER BY score DESC, joined_at ASC) as new_place
+  FROM locked_players
 )
 UPDATE room_players rp
 SET place = rp_ranked.new_place
@@ -90,6 +96,37 @@ WHERE rp.room_id = $1 AND rp.user_id = rp_ranked.user_id
 func (q *Queries) CalculateRoomLeaderboard(ctx context.Context, roomID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, calculateRoomLeaderboard, roomID)
 	return err
+}
+
+const checkIfProblemAlreadySolved = `-- name: CheckIfProblemAlreadySolved :one
+SELECT id, status, submitted_at
+FROM submissions
+WHERE user_id = $1
+  AND code_problem_id = $2
+  AND room_id = $3
+  AND status = 'accepted'
+LIMIT 1
+`
+
+type CheckIfProblemAlreadySolvedParams struct {
+	UserID        pgtype.UUID
+	CodeProblemID pgtype.UUID
+	RoomID        pgtype.UUID
+}
+
+type CheckIfProblemAlreadySolvedRow struct {
+	ID          pgtype.UUID
+	Status      SubmissionStatus
+	SubmittedAt pgtype.Timestamptz
+}
+
+// Check if a player has already solved a problem in a specific room
+// Returns the submission if it exists and is accepted, otherwise returns error
+func (q *Queries) CheckIfProblemAlreadySolved(ctx context.Context, arg CheckIfProblemAlreadySolvedParams) (CheckIfProblemAlreadySolvedRow, error) {
+	row := q.db.QueryRow(ctx, checkIfProblemAlreadySolved, arg.UserID, arg.CodeProblemID, arg.RoomID)
+	var i CheckIfProblemAlreadySolvedRow
+	err := row.Scan(&i.ID, &i.Status, &i.SubmittedAt)
+	return i, err
 }
 
 const countEventParticipants = `-- name: CountEventParticipants :one

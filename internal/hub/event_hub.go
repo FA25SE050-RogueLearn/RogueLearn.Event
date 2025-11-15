@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +18,7 @@ import (
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
 	pb "github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/protos"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -33,8 +36,8 @@ const (
 type EventHub struct {
 	logger        *slog.Logger
 	queries       *store.Queries
-	db            *pgxpool.Pool // Database pool for transactions
-	Rooms         map[uuid.UUID]*RoomHub // roomID -> roomManager
+	db            *pgxpool.Pool             // Database pool for transactions
+	Rooms         map[uuid.UUID]*RoomHub    // roomID -> roomManager
 	EventRooms    map[uuid.UUID][]uuid.UUID // eventID -> []roomID
 	Mu            sync.RWMutex
 	leaderboardMu sync.Mutex // Protects leaderboard calculation
@@ -75,7 +78,7 @@ func NewEventHub(db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, 
 		db:              db,
 		Rooms:           make(map[uuid.UUID]*RoomHub),
 		EventRooms:      make(map[uuid.UUID][]uuid.UUID), // NEW!
-		GuildUpdateChan: make(chan uuid.UUID, 100), // Buffered channel
+		GuildUpdateChan: make(chan uuid.UUID, 100),       // Buffered channel
 		EventListeners:  make(map[uuid.UUID]map[uuid.UUID]chan<- events.SseEvent),
 		rabbitClient:    rabbitClient,
 		executorClient:  executorClient,
@@ -85,27 +88,10 @@ func NewEventHub(db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, 
 
 	// Recover timers for active events on startup
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		e.recoverActiveEvents(ctx)
 	}()
-
-	supabaseEventID, _ := uuid.Parse("e88e5761-e0fa-409d-baad-057edad1496a")
-	e.EventListeners[supabaseEventID] = make(map[uuid.UUID]chan<- events.SseEvent)
-
-	// --------- remove on production ---------
-	beginnerArea, err := uuid.Parse("4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f90")
-	if err != nil {
-		panic(err)
-	}
-	advancedLobby, err := uuid.Parse("5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f90a1")
-	if err != nil {
-		panic(err)
-	}
-
-	// remove on production
-	e.CreateRoom(supabaseEventID, beginnerArea, queries)
-	e.CreateRoom(supabaseEventID, advancedLobby, queries)
 
 	go e.Start()
 
@@ -765,6 +751,7 @@ func (r *RoomHub) dispatchEvent(e events.SseEvent) {
 	}
 }
 
+// This only works in the same instance the request received
 func (r *RoomHub) dispatchEventToPlayer(e events.SseEvent, playerID uuid.UUID) {
 	r.Mu.RLock()
 	if r.Listerners == nil {
@@ -850,7 +837,6 @@ func (r *RoomHub) processSolutionSubmitted(event events.SolutionSubmitted) error
 		return err
 	}
 
-	// TODO: Send grpc request to executor service
 	result, err := r.executorClient.ExecuteCode(ctx, &pb.ExecuteRequest{
 		Language:     lang.Name,
 		Code:         event.Code,
@@ -865,19 +851,28 @@ func (r *RoomHub) processSolutionSubmitted(event events.SolutionSubmitted) error
 		return err
 	}
 
-	solutionResult := generateSolutionResult(event, result)
+	eventCodeProblem, err := r.queries.GetEventCodeProblem(ctx, store.GetEventCodeProblemParams{
+		EventID:       toPgtypeUUID(event.EventID),
+		CodeProblemID: toPgtypeUUID(event.ProblemID),
+	})
+	if err != nil {
+		return err
+	}
+
+	solutionResult := r.generateSolutionResult(event, result, eventCodeProblem.Score)
 	r.Events <- solutionResult
 
 	return nil
 }
 
 // generateSolutionResult creates a SolutionResult from the execution response
-func generateSolutionResult(solutionSubmitted events.SolutionSubmitted, result *pb.ExecuteResponse) events.SolutionResult {
+func (r *RoomHub) generateSolutionResult(solutionSubmitted events.SolutionSubmitted, result *pb.ExecuteResponse, score int32) events.SolutionResult {
 	solutionResult := events.SolutionResult{
 		SolutionSubmitted: solutionSubmitted,
-		Score:             50, // TODO: Calculate actual score based on test cases passed
+		Score:             score,
 		Status:            events.Accepted,
 		Message:           "Solution is correct!",
+		ExecutionTimeMs:   result.ExecutionTimeMs,
 	}
 
 	// If execution was not successful, determine the error type and set appropriate status
@@ -922,25 +917,38 @@ func (r *RoomHub) processSolutionResult(event events.SolutionResult) error {
 
 	if event.Status != events.Accepted {
 		r.logger.Info("solution failed", "event", event)
+
+		// Map JudgeStatus to SubmissionStatus
+		var submissionStatus store.SubmissionStatus
+		switch event.Status {
+		case events.CompilationError:
+			submissionStatus = store.SubmissionStatusPending // or create a compilation_error status if available
+		case events.RuntimeError:
+			submissionStatus = store.SubmissionStatusPending // or create a runtime_error status if available
+		case events.WrongAnswer:
+			submissionStatus = store.SubmissionStatusWrongAnswer
+		default:
+			submissionStatus = store.SubmissionStatusPending
+		}
+
+		// Update submission status in database
+		_, err := r.queries.UpdateSubmission(ctx, store.UpdateSubmissionParams{
+			ID:     toPgtypeUUID(event.SolutionSubmitted.SubmissionID),
+			Status: submissionStatus,
+		})
+		if err != nil {
+			r.logger.Error("Failed to update submission status for failed solution",
+				"submission_id", event.SolutionSubmitted.SubmissionID,
+				"error", err)
+			// Continue despite error - don't block the event flow
+		}
+
 		sseEvent := events.SseEvent{
 			EventType: events.WRONG_SOLUTION_SUBMITTED,
-			Data:      fmt.Sprintf("status:%v,message:%v", event.Status, event.Message),
+			Data:      event, // Send the full result object instead of formatted string
 		}
 
 		r.publishEvent(ctx, roomRoutingKey, sseEvent)
-
-		// _, err := r.queries.UpdateSubmissionStatus(ctx, store.UpdateSubmissionStatusParams{
-		// 	ID:     toPgtypeUUID(event.SolutionSubmitted.SubmissionID),
-		// 	Status: store.SubmissionStatusWrongAnswer,
-		// })
-
-		// if err != nil {
-		// 	r.logger.Error("failed to update submission status to wrong", "error", err,
-		// 		"submission_id", event.SolutionSubmitted.SubmissionID)
-		// 	return err
-		// }
-
-		// go r.dispatchEventToPlayer(sseEvent, event.SolutionSubmitted.PlayerID)
 
 		return nil
 	}
@@ -988,7 +996,27 @@ func (r *RoomHub) processSolutionResult(event events.SolutionResult) error {
 		return fmt.Errorf("failed to calculate leaderboard: %w", err)
 	}
 
+	// Update submission status to 'accepted' within the transaction
+	// This ensures atomicity: if leaderboard calculation fails, submission isn't marked as accepted
+	//
+	executionTimeMs := parseExecutionTime(event.ExecutionTimeMs)
+	if executionTimeMs == (pgtype.Int4{}) && event.ExecutionTimeMs != "" {
+		r.logger.Warn("failed to parse execution time", "value", event.ExecutionTimeMs)
+	}
+	_, err = qtx.UpdateSubmission(ctx, store.UpdateSubmissionParams{
+		ID:              toPgtypeUUID(event.SolutionSubmitted.SubmissionID),
+		Status:          store.SubmissionStatusAccepted,
+		ExecutionTimeMs: pgtype.Int4{Int32: 0, Valid: false}, // TODO: Get actual execution time from result
+	})
+	if err != nil {
+		r.logger.Error("Failed to update submission status to accepted",
+			"submission_id", event.SolutionSubmitted.SubmissionID,
+			"error", err)
+		return fmt.Errorf("failed to update submission status: %w", err)
+	}
+
 	// Commit the transaction atomically
+	// This commits: score update + leaderboard calculation + submission status update
 	err = tx.Commit(ctx)
 	if err != nil {
 		r.logger.Error("Failed to commit score and leaderboard transaction",
@@ -1006,9 +1034,18 @@ func (r *RoomHub) processSolutionResult(event events.SolutionResult) error {
 		return err
 	}
 
+	// Publish correct solution event with full result details
+	correctSolutionEvent := events.SseEvent{
+		EventType: events.CORRECT_SOLUTION_SUBMITTED,
+		Data:      event, // Send full result with score, message, etc.
+	}
+	r.publishEvent(ctx, roomRoutingKey, correctSolutionEvent)
+
+	// Publish updated room leaderboard
 	roomLeaderboardEvent := events.SseEvent{EventType: events.LEADERBOARD_UPDATED, Data: roomEntries}
 	r.publishEvent(ctx, roomRoutingKey, roomLeaderboardEvent)
 
+	// Publish updated guild leaderboard
 	guildEntries, err := r.queries.GetGuildLeaderboardByEvent(ctx, toPgtypeUUID(r.EventID))
 	if err == nil {
 		eventRoutingKey := fmt.Sprintf("event.%s", r.EventID)
@@ -1018,8 +1055,36 @@ func (r *RoomHub) processSolutionResult(event events.SolutionResult) error {
 		r.logger.Error("failed to get guild leaderboard for event", "error", err, "event_id", r.EventID)
 	}
 
-	// ... update submission status in DB
+	r.logger.Info("Solution processed successfully",
+		"submission_id", event.SolutionSubmitted.SubmissionID,
+		"player_id", event.SolutionSubmitted.PlayerID,
+		"score", event.Score)
+
 	return nil
+}
+
+func parseExecutionTime(execTimeStr string) pgtype.Int4 {
+	if execTimeStr == "" {
+		return pgtype.Int4{}
+	}
+
+	// Remove "ms" suffix and parse the numeric value
+	timeStr := strings.TrimSuffix(execTimeStr, "ms")
+	timeValue, err := strconv.ParseInt(timeStr, 10, 32)
+	if err != nil {
+		// Return null pgtype.Int4 if parsing fails
+		return pgtype.Int4{}
+	}
+
+	return pgtype.Int4{Int32: int32(timeValue), Valid: true}
+}
+
+// Helper function to convert pgtype.Int4 to string with "ms" suffix
+func formatExecutionTime(execTime pgtype.Int4) string {
+	if !execTime.Valid {
+		return ""
+	}
+	return strconv.FormatInt(int64(execTime.Int32), 10) + "ms"
 }
 
 // Helper method to check if player is in room
@@ -1050,6 +1115,7 @@ func (r *RoomHub) addPlayerToRoom(ctx context.Context, roomID, playerID uuid.UUI
 		RoomID:   toPgtypeUUID(roomID),
 		UserID:   toPgtypeUUID(playerID),
 		Username: playerName,
+		State:    store.RoomPlayerStatePresent,
 	}
 
 	_, err := r.queries.CreateRoomPlayer(ctx, createParams)
@@ -1153,24 +1219,42 @@ func (r *RoomHub) getRoomLeaderboardEntries(ctx context.Context) ([]RoomLeaderbo
 	return entries, nil
 }
 
+// Process the player joined event
 func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
-	// Process the player joined event
 	ctx := context.Background()
-	// playerID is passed by the event
-	// playerID is parsed from the jwt token
-	if ok := r.playerInRoom(ctx, event.RoomID, event.PlayerID); !ok {
-		r.logger.Info("player is not in room, adding to room...",
-			"playerID", event.PlayerID,
-			"room", event.RoomID)
 
-		playerName := "grpc_called"
-
-		err := r.addPlayerToRoom(ctx, event.RoomID, event.PlayerID, playerName)
-		if err != nil {
-			r.logger.Error("failed to add player to room", "error", err)
+	p, err := r.queries.GetRoomPlayer(ctx, store.GetRoomPlayerParams{
+		RoomID: toPgtypeUUID(event.RoomID),
+		UserID: toPgtypeUUID(event.PlayerID),
+	})
+	if err == pgx.ErrNoRows {
+		r.logger.Info("Player not found in room", "room_id", event.RoomID, "player_id", event.PlayerID)
+		s := rand.NewPCG(uint64(time.Now().UnixNano()), 0)
+		rand := rand.New(s)
+		fmt.Println(rand.IntN(100))
+		playerName := fmt.Sprintf("grpc_called_%d", rand.IntN(100))
+		if err := r.addPlayerToRoom(ctx, event.RoomID, event.PlayerID, playerName); err != nil {
+			r.logger.Error("Failed to add player to room", "room_id", event.RoomID, "player_id", event.PlayerID, "error", err)
 			return err
 		}
 	}
+
+	// get playername grpc
+
+	if p.State != store.RoomPlayerStatePresent {
+		if _, err := r.queries.UpdateRoomPlayerState(ctx, store.UpdateRoomPlayerStateParams{
+			RoomID: toPgtypeUUID(event.RoomID),
+			UserID: toPgtypeUUID(event.PlayerID),
+			State:  store.RoomPlayerStatePresent,
+		}); err != nil {
+			r.logger.Error("Failed to update room player state", "room_id", event.RoomID, "player_id", event.PlayerID, "error", err)
+			return err
+		}
+	}
+
+	r.logger.Info("player is not in room, adding to room...",
+		"playerID", event.PlayerID,
+		"room", event.RoomID)
 
 	// Recalculate leaderboard after a player joins
 	if err := r.calculateLeaderboard(ctx); err != nil {
@@ -1184,15 +1268,6 @@ func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 	playerJoinedEvent := events.SseEvent{EventType: events.PLAYER_JOINED, Data: event}
 	r.publishEvent(ctx, roomRoutingKey, playerJoinedEvent)
 
-	// data := fmt.Sprintf("playerId:%d,roomId:%d\n\n", event.PlayerID, r.RoomID)
-
-	// playerJoined := events.SseEvent{
-	// 	EventType: events.PLAYER_JOINED,
-	// 	Data:      data,
-	// }
-
-	// go r.dispatchEvent(playerJoined)
-
 	entries, err := r.getRoomLeaderboardEntries(ctx)
 	if err != nil {
 		return err
@@ -1205,7 +1280,40 @@ func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 
 	r.publishEvent(ctx, roomRoutingKey, leaderboardUpdatedEvent)
 
-	// go r.dispatchEvent(leaderboardUpdated)
+	// Send time remaining to the player who just joined
+	// This is only sent on successful join
+	eventDetails, err := r.queries.GetEventByID(ctx, toPgtypeUUID(event.EventID))
+	if err != nil {
+		r.logger.Error("Failed to get event details for time remaining",
+			"event_id", event.EventID,
+			"player_id", event.PlayerID,
+			"error", err)
+		// Don't fail the join if we can't get time remaining
+	} else {
+		remaining := time.Until(eventDetails.EndDate.Time)
+		if remaining > 0 {
+			initialTime := map[string]any{
+				"event_id":       event.EventID.String(),
+				"end_date":       eventDetails.EndDate.Time.Format(time.RFC3339),
+				"seconds_left":   int64(remaining.Seconds()),
+				"formatted_time": formatDuration(remaining),
+				"server_time":    time.Now().Format(time.RFC3339),
+			}
+
+			// Send time remaining directly to the player who joined
+			timeRemainingEvent := events.SseEvent{
+				EventType: "initial_time",
+				Data:      initialTime,
+			}
+
+			r.dispatchEventToPlayer(timeRemainingEvent, event.PlayerID)
+
+			r.logger.Info("Sent time remaining to player after successful join",
+				"player_id", event.PlayerID,
+				"event_id", event.EventID,
+				"seconds_left", int64(remaining.Seconds()))
+		}
+	}
 
 	return nil
 }
@@ -1216,9 +1324,19 @@ func (r *RoomHub) processPlayerLeft(event events.PlayerLeft) error {
 	// Process the player left event
 	data := fmt.Sprintf("playerId:%d,roomId:%d\n\n", event.PlayerID, r.RoomID)
 
-	err := r.removePlayerFromRoom(ctx, event.RoomID, event.PlayerID)
+	// change status to disconnect instead of remove
+	_, err := r.queries.UpdateRoomPlayerState(ctx, store.UpdateRoomPlayerStateParams{
+		RoomID: toPgtypeUUID(event.RoomID),
+		UserID: toPgtypeUUID(event.PlayerID),
+		State:  store.RoomPlayerStateDisconnected,
+	})
 	if err != nil {
-		r.logger.Error("failed to remove player from room", "error", err)
+		r.logger.Error("failed to update player state",
+			"error", err,
+			"player_id", event.PlayerID,
+			"room_id", event.RoomID,
+			"state", store.RoomPlayerStateDisconnected,
+		)
 	}
 
 	// Recalculate leaderboard after a player leaves
@@ -1299,4 +1417,14 @@ func storeTestCasesToPbTestCases(testCases []store.TestCase) []*pb.TestCase {
 		pbTestCases[i] = storeTestCaseToPbTestCase(tc)
 	}
 	return pbTestCases
+}
+
+// formatDuration formats a duration as HH:MM:SS
+func formatDuration(d time.Duration) string {
+	totalSeconds := int(d.Seconds())
+	hours := totalSeconds / 3600
+	minutes := (totalSeconds % 3600) / 60
+	seconds := totalSeconds % 60
+
+	return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 }

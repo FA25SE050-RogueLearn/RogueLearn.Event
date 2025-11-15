@@ -11,9 +11,10 @@ import (
 )
 
 type CodeProblemResponse struct {
-	Title            string `json:"title"`
-	ProblemStatement string `json:"problem_statement"`
-	Difficulty       int32  `json:"difficulty"`
+	ID               uuid.UUID `json:"id"`
+	Title            string    `json:"title"`
+	ProblemStatement string    `json:"problem_statement"`
+	Difficulty       int32     `json:"difficulty"`
 }
 
 func (hr *HandlerRepo) GetProblemsHandler(w http.ResponseWriter, r *http.Request) {
@@ -32,7 +33,7 @@ func (hr *HandlerRepo) GetProblemsHandler(w http.ResponseWriter, r *http.Request
 
 	err = response.JSON(w, response.JSONResponseParameters{
 		Status:  http.StatusOK,
-		Data:    problems,
+		Data:    toProblemResponses(problems),
 		Success: true,
 		Msg:     "Problems retrieved successfully",
 	})
@@ -91,6 +92,7 @@ func (hr *HandlerRepo) GetEventProblemsHandler(w http.ResponseWriter, r *http.Re
 	problemResponses := make([]CodeProblemResponse, len(cps))
 	for i, cp := range cps {
 		problemResponses[i] = CodeProblemResponse{
+			ID:               cp.CodeProblemID.Bytes,
 			Title:            cp.Title,
 			ProblemStatement: cp.ProblemStatement,
 			Difficulty:       cp.Difficulty,
@@ -197,6 +199,7 @@ func toProblemResponses(problems []store.CodeProblem) []CodeProblemResponse {
 	responses := make([]CodeProblemResponse, len(problems))
 	for i, problem := range problems {
 		responses[i] = CodeProblemResponse{
+			ID:               problem.ID.Bytes,
 			Title:            problem.Title,
 			ProblemStatement: problem.ProblemStatement,
 			Difficulty:       problem.Difficulty,
