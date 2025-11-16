@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/jwt"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/jwt"
 )
 
 type Key string

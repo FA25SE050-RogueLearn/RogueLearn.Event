@@ -8,7 +8,7 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/response"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/response"
 )
 
 var (

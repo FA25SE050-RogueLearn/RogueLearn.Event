@@ -129,6 +129,17 @@ func (q *Queries) CheckIfProblemAlreadySolved(ctx context.Context, arg CheckIfPr
 	return i, err
 }
 
+const countCodeProblems = `-- name: CountCodeProblems :one
+SELECT COUNT(*) FROM code_problems
+`
+
+func (q *Queries) CountCodeProblems(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countCodeProblems)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countEventParticipants = `-- name: CountEventParticipants :one
 SELECT COUNT(*) FROM event_guild_participants
 WHERE event_id = $1
@@ -136,6 +147,76 @@ WHERE event_id = $1
 
 func (q *Queries) CountEventParticipants(ctx context.Context, eventID pgtype.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countEventParticipants, eventID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countEventRequests = `-- name: CountEventRequests :one
+SELECT COUNT(*) FROM event_requests
+`
+
+func (q *Queries) CountEventRequests(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countEventRequests)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countEventRequestsByGuild = `-- name: CountEventRequestsByGuild :one
+SELECT COUNT(*) FROM event_requests
+WHERE requester_guild_id = $1
+`
+
+func (q *Queries) CountEventRequestsByGuild(ctx context.Context, requesterGuildID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countEventRequestsByGuild, requesterGuildID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countEventRequestsByStatus = `-- name: CountEventRequestsByStatus :one
+SELECT COUNT(*) FROM event_requests
+WHERE status = $1
+`
+
+func (q *Queries) CountEventRequestsByStatus(ctx context.Context, status EventRequestStatus) (int64, error) {
+	row := q.db.QueryRow(ctx, countEventRequestsByStatus, status)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countEvents = `-- name: CountEvents :one
+SELECT COUNT(*) FROM events
+`
+
+func (q *Queries) CountEvents(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countEvents)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSubmissionsByUser = `-- name: CountSubmissionsByUser :one
+SELECT COUNT(*)
+FROM submissions s
+WHERE s.user_id = $1
+`
+
+func (q *Queries) CountSubmissionsByUser(ctx context.Context, userID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countSubmissionsByUser, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countTags = `-- name: CountTags :one
+SELECT COUNT(*) FROM tags
+`
+
+func (q *Queries) CountTags(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countTags)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -341,7 +422,10 @@ INSERT INTO event_requests (
   proposed_start_date, proposed_end_date, notes,
   participation_details, room_configuration, event_specifics
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+  $1, $2, $3, $4, $5, $6, $7,
+  $8::jsonb,
+  $9::jsonb,
+  $10::jsonb
 ) RETURNING id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, room_configuration, event_specifics, rejection_reason, approved_event_id
 `
 
@@ -353,9 +437,9 @@ type CreateEventRequestParams struct {
 	ProposedStartDate    pgtype.Timestamptz
 	ProposedEndDate      pgtype.Timestamptz
 	Notes                pgtype.Text
-	ParticipationDetails []byte
-	RoomConfiguration    []byte
-	EventSpecifics       []byte
+	ParticipationDetails string
+	RoomConfiguration    string
+	EventSpecifics       string
 }
 
 // Event Requests
@@ -3470,6 +3554,37 @@ func (q *Queries) UpdateRoomPlayerState(ctx context.Context, arg UpdateRoomPlaye
 		&i.JoinedAt,
 	)
 	return i, err
+}
+
+const updateRoomPlayerStatesOnEventComplete = `-- name: UpdateRoomPlayerStatesOnEventComplete :execrows
+WITH locked_players AS (
+  SELECT rp.room_id, rp.user_id, rp.state
+  FROM room_players rp
+  INNER JOIN rooms r ON rp.room_id = r.id
+  WHERE r.event_id = $1
+  FOR UPDATE OF rp
+)
+UPDATE room_players rp
+SET state = CASE
+  WHEN lp.state = 'present' THEN 'completed'::room_player_state
+  WHEN lp.state = 'disconnected' THEN 'left'::room_player_state
+  ELSE lp.state
+END
+FROM locked_players lp
+WHERE rp.room_id = lp.room_id AND rp.user_id = lp.user_id
+`
+
+// Update player states when event completes
+// Uses FOR UPDATE to lock rows and prevent race conditions
+// present -> completed (player was active when event ended)
+// disconnected -> left (player disconnected during event)
+// Returns number of rows affected
+func (q *Queries) UpdateRoomPlayerStatesOnEventComplete(ctx context.Context, eventID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, updateRoomPlayerStatesOnEventComplete, eventID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateSubmission = `-- name: UpdateSubmission :one

@@ -4,8 +4,8 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
-	pb "github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/protos"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/store"
+	pb "github.com/FA25SE050-RogueLearn/RogueLearn.Event/protos"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"google.golang.org/protobuf/types/known/timestamppb"

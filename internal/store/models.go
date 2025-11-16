@@ -298,8 +298,8 @@ type EventRequest struct {
 	ProposedStartDate    pgtype.Timestamptz
 	ProposedEndDate      pgtype.Timestamptz
 	Notes                pgtype.Text
-	ParticipationDetails []byte
-	RoomConfiguration    []byte
+	ParticipationDetails string
+	RoomConfiguration    string
 	EventSpecifics       []byte
 	RejectionReason      pgtype.Text
 	ApprovedEventID      pgtype.UUID

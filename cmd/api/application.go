@@ -4,8 +4,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/handlers"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/handlers"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/store"
 )
 
 type Application struct {

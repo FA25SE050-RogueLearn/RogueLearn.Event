@@ -9,17 +9,18 @@ import (
 	"os"
 	"runtime/debug"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/cmd/api"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/database"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/protos"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/cmd/api"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/database"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/protos"
 	"google.golang.org/grpc"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/executor"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/rabbitmq"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/handlers"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/service"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/env"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/client/executor"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/client/rabbitmq"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/client/user"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/handlers"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/service"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/store"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/env"
 	"github.com/joho/godotenv"
 	"github.com/lmittmann/tint"
 )
@@ -78,11 +79,23 @@ func main() {
 	}
 	defer executorClient.Close()
 
+	userURL := env.GetString("EVENT_USER_URL", "")
+	if userURL == "" {
+		print("EVENT_USER_URL environment variable is not set")
+		panic("EVENT_USER_URL environment variable is not set")
+	}
+	userClient, err := user.NewClient(userURL)
+	if err != nil {
+		print("Could not connect to User", userURL)
+		panic(fmt.Sprintf("Could not connect to User Service: %v", err))
+	}
+	defer userClient.Close()
+
 	// Create a context for background goroutines
 	ctx := context.Background()
 
 	// Create handler repo with context for cleanup routine
-	handlerRepo := handlers.NewHandlerRepo(ctx, logger, db, queries, rabbitClient, executorClient)
+	handlerRepo := handlers.NewHandlerRepo(ctx, logger, db, queries, rabbitClient, executorClient, userClient)
 
 	app := api.NewApplication(cfg, logger, queries, handlerRepo)
 

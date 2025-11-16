@@ -27,6 +27,9 @@ ORDER BY started_date ASC
 LIMIT $1
 OFFSET $2;
 
+-- name: CountEvents :one
+SELECT COUNT(*) FROM events;
+
 -- name: GetEventsByType :many
 SELECT * FROM events
 WHERE type = $1
@@ -99,6 +102,9 @@ ORDER BY name
 LIMIT $1
 OFFSET $2;
 
+-- name: CountTags :one
+SELECT COUNT(*) FROM tags;
+
 
 -- name: GetTagByName :one
 SELECT * FROM tags WHERE name = $1;
@@ -126,6 +132,9 @@ SELECT * FROM code_problems
 ORDER BY created_at DESC
 LIMIT $1
 OFFSET $2;
+
+-- name: CountCodeProblems :one
+SELECT COUNT(*) FROM code_problems;
 
 -- name: GetCodeProblemsByDifficulty :many
 SELECT * FROM code_problems
@@ -448,6 +457,11 @@ ORDER BY s.submitted_at DESC
 LIMIT $2
 OFFSET $3;
 
+-- name: CountSubmissionsByUser :one
+SELECT COUNT(*)
+FROM submissions s
+WHERE s.user_id = $1;
+
 -- name: GetSubmissionsByProblem :many
 SELECT s.*, l.name as language_name
 FROM submissions s
@@ -657,7 +671,10 @@ INSERT INTO event_requests (
   proposed_start_date, proposed_end_date, notes,
   participation_details, room_configuration, event_specifics
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+  $1, $2, $3, $4, $5, $6, $7,
+  sqlc.arg(participation_details)::jsonb,
+  sqlc.arg(room_configuration)::jsonb,
+  sqlc.arg(event_specifics)::jsonb
 ) RETURNING *;
 
 -- name: GetEventRequestByID :one
@@ -668,17 +685,28 @@ SELECT * FROM event_requests
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2;
 
+-- name: CountEventRequests :one
+SELECT COUNT(*) FROM event_requests;
+
 -- name: ListEventRequestsByStatus :many
 SELECT * FROM event_requests
 WHERE status = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3;
 
+-- name: CountEventRequestsByStatus :one
+SELECT COUNT(*) FROM event_requests
+WHERE status = $1;
+
 -- name: ListEventRequestsByGuild :many
 SELECT * FROM event_requests
 WHERE requester_guild_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3;
+
+-- name: CountEventRequestsByGuild :one
+SELECT COUNT(*) FROM event_requests
+WHERE requester_guild_id = $1;
 
 -- name: UpdateEventRequestStatus :one
 UPDATE event_requests
@@ -720,3 +748,25 @@ RETURNING *;
 UPDATE events
 SET status = 'completed'
 WHERE id = $1 AND status = 'active';
+
+-- name: UpdateRoomPlayerStatesOnEventComplete :execrows
+-- Update player states when event completes
+-- Uses FOR UPDATE to lock rows and prevent race conditions
+-- present -> completed (player was active when event ended)
+-- disconnected -> left (player disconnected during event)
+-- Returns number of rows affected
+WITH locked_players AS (
+  SELECT rp.room_id, rp.user_id, rp.state
+  FROM room_players rp
+  INNER JOIN rooms r ON rp.room_id = r.id
+  WHERE r.event_id = $1
+  FOR UPDATE OF rp
+)
+UPDATE room_players rp
+SET state = CASE
+  WHEN lp.state = 'present' THEN 'completed'::room_player_state
+  WHEN lp.state = 'disconnected' THEN 'left'::room_player_state
+  ELSE lp.state
+END
+FROM locked_players lp
+WHERE rp.room_id = lp.room_id AND rp.user_id = lp.user_id;

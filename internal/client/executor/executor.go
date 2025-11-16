@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	pb "github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/protos"
+	pb "github.com/FA25SE050-RogueLearn/RogueLearn.Event/protos"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )

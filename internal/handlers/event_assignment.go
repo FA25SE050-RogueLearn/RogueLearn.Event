@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/response"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/store"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/response"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -263,7 +263,7 @@ func (hr *HandlerRepo) assignCodeProblemsToEvent(ctx context.Context, qtx *store
 
 	// Unmarshal event specifics
 	var eventSpecifics EventSpecifics
-	if err := json.Unmarshal(eventRequest.EventSpecifics, &eventSpecifics); err != nil {
+	if err := json.Unmarshal([]byte(eventRequest.EventSpecifics), &eventSpecifics); err != nil {
 		return fmt.Errorf("failed to unmarshal event specifics: %w", err)
 	}
 
@@ -277,14 +277,14 @@ func (hr *HandlerRepo) assignCodeProblemsToEvent(ctx context.Context, qtx *store
 	hr.logger.Info("Starting code problem assignment",
 		"event_id", event.ID.Bytes,
 		"topics", len(codeBattle.Topics),
-		"distributions", len(codeBattle.Distrbution))
+		"distributions", len(codeBattle.Distribution))
 
 	// Track all assigned problem IDs to avoid duplicates across distributions
 	assignedProblemIDs := []pgtype.UUID{}
 	totalAssigned := 0
 
 	// Process each difficulty distribution
-	for _, dist := range codeBattle.Distrbution {
+	for _, dist := range codeBattle.Distribution {
 		hr.logger.Info("Processing difficulty distribution",
 			"difficulty", dist.Difficulty,
 			"number_of_problems", dist.NumberOfProblems,

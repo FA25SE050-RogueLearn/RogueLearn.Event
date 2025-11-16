@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/events"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/events"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )

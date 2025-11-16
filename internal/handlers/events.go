@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/request"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/response"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/store"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/request"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/response"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -21,6 +21,15 @@ func (hr *HandlerRepo) GetEventsHandler(w http.ResponseWriter, r *http.Request) 
 	// Parse pagination parameters from query string
 	pagination := parsePaginationParams(r)
 
+	// Get total count
+	totalCount, err := hr.queries.CountEvents(r.Context())
+	if err != nil {
+		hr.logger.Error("failed to count events", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Get paginated data
 	params := store.GetEventsParams{
 		Limit:  pagination.Limit,
 		Offset: pagination.Offset,
@@ -28,13 +37,17 @@ func (hr *HandlerRepo) GetEventsHandler(w http.ResponseWriter, r *http.Request) 
 
 	events, err := hr.queries.GetEvents(r.Context(), params)
 	if err != nil {
+		hr.logger.Error("failed to get events", "err", err)
 		hr.serverError(w, r, err)
 		return
 	}
 
+	// Create pagination response
+	paginatedResponse := createPaginationResponse(events, totalCount, pagination)
+
 	err = response.JSON(w, response.JSONResponseParameters{
 		Status:  http.StatusOK,
-		Data:    events,
+		Data:    paginatedResponse,
 		Success: true,
 		Msg:     "Events retrieved successfully",
 	})
@@ -76,8 +89,8 @@ type EventSpecifics struct {
 
 // CodeBattleDetails holds the specific requirements for a "code_battle" event.
 type CodeBattleDetails struct {
-	Topics      []uuid.UUID              `json:"topics"` // problem tag id
-	Distrbution []DifficultyDistribution `json:"distribution"`
+	Topics       []uuid.UUID              `json:"topics"` // problem tag id
+	Distribution []DifficultyDistribution `json:"distribution"`
 }
 
 type DifficultyDistribution struct {
@@ -122,10 +135,22 @@ func (hr *HandlerRepo) CreateEventHandler(w http.ResponseWriter, r *http.Request
 		hr.serverError(w, r, fmt.Errorf("failed to marshal participation details: %w", err))
 		return
 	}
+	// Validate the marshaled JSON
+	if !json.Valid(participationDetailsJSON) {
+		hr.logger.Error("invalid participation details JSON", "json", string(participationDetailsJSON))
+		hr.badRequest(w, r, errors.New("invalid participation details format"))
+		return
+	}
 
 	roomConfigJSON, err := json.Marshal(req.RoomConfiguration)
 	if err != nil {
 		hr.serverError(w, r, fmt.Errorf("failed to marshal room configuration: %w", err))
+		return
+	}
+	// Validate the marshaled JSON
+	if !json.Valid(roomConfigJSON) {
+		hr.logger.Error("invalid room configuration JSON", "json", string(roomConfigJSON))
+		hr.badRequest(w, r, errors.New("invalid room configuration format"))
 		return
 	}
 
@@ -136,9 +161,23 @@ func (hr *HandlerRepo) CreateEventHandler(w http.ResponseWriter, r *http.Request
 			hr.serverError(w, r, fmt.Errorf("failed to marshal event specifics: %w", err))
 			return
 		}
+		// Validate the marshaled JSON
+		if !json.Valid(eventSpecificsJSON) {
+			hr.logger.Error("invalid event specifics JSON", "json", string(eventSpecificsJSON))
+			hr.badRequest(w, r, errors.New("invalid event specifics format"))
+			return
+		}
+		hr.logger.Info("event specifics marshaled", "json", string(eventSpecificsJSON))
 	}
 
+	// Log all JSON fields for debugging
+	hr.logger.Info("marshaled JSON fields",
+		"participation", string(participationDetailsJSON),
+		"room_config", string(roomConfigJSON),
+		"event_specifics", string(eventSpecificsJSON))
+
 	// --- Database Insertion ---
+	// Convert []byte to string for JSONB fields (required for simple protocol mode)
 	params := store.CreateEventRequestParams{
 		RequesterGuildID:     toPgtypeUUID(requesterGuildID),
 		EventType:            store.EventType(req.EventType),
@@ -147,13 +186,18 @@ func (hr *HandlerRepo) CreateEventHandler(w http.ResponseWriter, r *http.Request
 		ProposedStartDate:    pgtype.Timestamptz{Time: req.ProposedStartDate, Valid: true},
 		ProposedEndDate:      pgtype.Timestamptz{Time: req.ProposedEndDate, Valid: true},
 		Notes:                pgtype.Text{String: req.Notes, Valid: req.Notes != ""},
-		ParticipationDetails: participationDetailsJSON,
-		RoomConfiguration:    roomConfigJSON,
-		EventSpecifics:       eventSpecificsJSON,
+		ParticipationDetails: string(participationDetailsJSON),
+		RoomConfiguration:    string(roomConfigJSON),
+		EventSpecifics:       string(eventSpecificsJSON),
 	}
 
 	eventRequest, err := hr.queries.CreateEventRequest(r.Context(), params)
 	if err != nil {
+		hr.logger.Error("failed to create event request in database",
+			"err", err,
+			"participation", string(participationDetailsJSON),
+			"room_config", string(roomConfigJSON),
+			"event_specifics", string(eventSpecificsJSON))
 		hr.serverError(w, r, err)
 		return
 	}
@@ -190,6 +234,15 @@ func (hr *HandlerRepo) GetMyEventRequestsHandler(w http.ResponseWriter, r *http.
 	// Parse pagination parameters from query string
 	pagination := parsePaginationParams(r)
 
+	// Get total count
+	totalCount, err := hr.queries.CountEventRequestsByGuild(r.Context(), toPgtypeUUID(guildID))
+	if err != nil {
+		hr.logger.Error("failed to count event requests by guild", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Get paginated data
 	params := store.ListEventRequestsByGuildParams{
 		RequesterGuildID: toPgtypeUUID(guildID),
 		Limit:            pagination.Limit,
@@ -198,6 +251,7 @@ func (hr *HandlerRepo) GetMyEventRequestsHandler(w http.ResponseWriter, r *http.
 
 	requests, err := hr.queries.ListEventRequestsByGuild(r.Context(), params)
 	if err != nil {
+		hr.logger.Error("failed to get event requests by guild", "err", err)
 		hr.serverError(w, r, err)
 		return
 	}
@@ -213,9 +267,12 @@ func (hr *HandlerRepo) GetMyEventRequestsHandler(w http.ResponseWriter, r *http.
 		responseDTOs = append(responseDTOs, dto)
 	}
 
+	// Create pagination response
+	paginatedResponse := createPaginationResponse(responseDTOs, totalCount, pagination)
+
 	err = response.JSON(w, response.JSONResponseParameters{
 		Status:  http.StatusOK,
-		Data:    responseDTOs,
+		Data:    paginatedResponse,
 		Success: true,
 		Msg:     "Your event requests retrieved successfully",
 	})
@@ -362,15 +419,34 @@ func (hr *HandlerRepo) GetEventRequestsHandler(w http.ResponseWriter, r *http.Re
 	pagination := parsePaginationParams(r)
 
 	var requests []store.EventRequest
+	var totalCount int64
 	var err error
 
 	if status != "" {
+		// Get count with filter
+		totalCount, err = hr.queries.CountEventRequestsByStatus(r.Context(), store.EventRequestStatus(status))
+		if err != nil {
+			hr.logger.Error("failed to count event requests by status", "err", err)
+			hr.serverError(w, r, err)
+			return
+		}
+
+		// Get filtered data
 		requests, err = hr.queries.ListEventRequestsByStatus(r.Context(), store.ListEventRequestsByStatusParams{
 			Status: store.EventRequestStatus(status),
 			Limit:  pagination.Limit,
 			Offset: pagination.Offset,
 		})
 	} else {
+		// Get total count
+		totalCount, err = hr.queries.CountEventRequests(r.Context())
+		if err != nil {
+			hr.logger.Error("failed to count event requests", "err", err)
+			hr.serverError(w, r, err)
+			return
+		}
+
+		// Get all data
 		requests, err = hr.queries.ListEventRequests(r.Context(), store.ListEventRequestsParams{
 			Limit:  pagination.Limit,
 			Offset: pagination.Offset,
@@ -378,6 +454,7 @@ func (hr *HandlerRepo) GetEventRequestsHandler(w http.ResponseWriter, r *http.Re
 	}
 
 	if err != nil {
+		hr.logger.Error("failed to get event requests", "err", err)
 		hr.serverError(w, r, err)
 		return
 	}
@@ -392,9 +469,12 @@ func (hr *HandlerRepo) GetEventRequestsHandler(w http.ResponseWriter, r *http.Re
 		responseDTOs = append(responseDTOs, dto)
 	}
 
+	// Create pagination response
+	paginatedResponse := createPaginationResponse(responseDTOs, totalCount, pagination)
+
 	err = response.JSON(w, response.JSONResponseParameters{
 		Status:  http.StatusOK,
-		Data:    responseDTOs,
+		Data:    paginatedResponse,
 		Success: true,
 		Msg:     "Event requests retrieved successfully",
 	})
@@ -470,12 +550,12 @@ func (hr *HandlerRepo) ProcessEventRequestHandler(w http.ResponseWriter, r *http
 // approve an event will create the event and schedule delayed processing for room creation and guild assignment
 func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventRequest, adminID uuid.UUID) error {
 	var roomConfig RoomConfiguration
-	if err := json.Unmarshal(req.RoomConfiguration, &roomConfig); err != nil {
+	if err := json.Unmarshal([]byte(req.RoomConfiguration), &roomConfig); err != nil {
 		return fmt.Errorf("failed to unmarshal room configuration: %w", err)
 	}
 
 	var participationDetails ParticipationDetails
-	if err := json.Unmarshal(req.ParticipationDetails, &participationDetails); err != nil {
+	if err := json.Unmarshal([]byte(req.ParticipationDetails), &participationDetails); err != nil {
 		return fmt.Errorf("failed to unmarshal participation details: %w", err)
 	}
 
@@ -576,7 +656,7 @@ func (hr *HandlerRepo) declineEventRequest(ctx context.Context, req store.EventR
 func toEventRequestResponse(req store.EventRequest) (EventRequestResponse, error) {
 	var participation ParticipationDetails
 	if len(req.ParticipationDetails) > 0 {
-		if err := json.Unmarshal(req.ParticipationDetails, &participation); err != nil {
+		if err := json.Unmarshal([]byte(req.ParticipationDetails), &participation); err != nil {
 			participation = ParticipationDetails{} // Use empty struct on error
 			return EventRequestResponse{}, err
 		}
@@ -584,7 +664,7 @@ func toEventRequestResponse(req store.EventRequest) (EventRequestResponse, error
 
 	var roomConfig RoomConfiguration
 	if len(req.RoomConfiguration) > 0 {
-		if err := json.Unmarshal(req.RoomConfiguration, &roomConfig); err != nil {
+		if err := json.Unmarshal([]byte(req.RoomConfiguration), &roomConfig); err != nil {
 			roomConfig = RoomConfiguration{}
 			return EventRequestResponse{}, err
 		}
@@ -593,7 +673,7 @@ func toEventRequestResponse(req store.EventRequest) (EventRequestResponse, error
 	var eventSpecifics *EventSpecifics
 	if len(req.EventSpecifics) > 0 {
 		eventSpecifics = &EventSpecifics{}
-		if err := json.Unmarshal(req.EventSpecifics, eventSpecifics); err != nil {
+		if err := json.Unmarshal([]byte(req.EventSpecifics), eventSpecifics); err != nil {
 			// Log error but continue - event specifics are optional
 			eventSpecifics = nil
 		}

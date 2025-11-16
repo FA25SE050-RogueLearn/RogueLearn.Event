@@ -7,12 +7,13 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/executor"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/rabbitmq"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/hub"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/env"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/jwt"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/client/executor"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/client/rabbitmq"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/client/user"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/hub"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/store"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/env"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/jwt"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -33,7 +34,7 @@ type HandlerRepo struct {
 
 // NewHandlerRepo creates a new HandlerRepo with the provided dependencies.
 // It also starts the background cleanup routine for inactive rooms.
-func NewHandlerRepo(ctx context.Context, logger *slog.Logger, db *pgxpool.Pool, queries *store.Queries, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client) *HandlerRepo {
+func NewHandlerRepo(ctx context.Context, logger *slog.Logger, db *pgxpool.Pool, queries *store.Queries, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client, userClient *user.Client) *HandlerRepo {
 	// Load JWT configuration
 	secKey := env.GetString("EVENT_SUPABASE_JWT_SECRET", "")
 	if secKey == "" {
@@ -54,7 +55,7 @@ func NewHandlerRepo(ctx context.Context, logger *slog.Logger, db *pgxpool.Pool, 
 	audience := "authenticated"
 
 	// Create the event hub (pass db for transaction support)
-	eventHub := hub.NewEventHub(db, queries, logger, rabbitClient, executorClient)
+	eventHub := hub.NewEventHub(db, queries, logger, rabbitClient, executorClient, userClient)
 
 	// Start the cleanup routine for inactive rooms
 	// Check every 5 minutes, remove rooms inactive for more than 30 minutes
@@ -89,8 +90,35 @@ func (hr *HandlerRepo) GetLogger() *slog.Logger {
 
 // PaginationParams holds the calculated pagination parameters (limit and offset)
 type PaginationParams struct {
-	Limit  int32
-	Offset int32
+	Limit     int32
+	Offset    int32
+	PageIndex int32
+	PageSize  int32
+}
+
+// PaginationResponse wraps paginated data with metadata
+type PaginationResponse struct {
+	Items      interface{} `json:"items"`
+	TotalCount int64       `json:"total_count"`
+	TotalPages int64       `json:"total_pages"`
+	PageIndex  int32       `json:"page_index"`
+	PageSize   int32       `json:"page_size"`
+}
+
+// createPaginationResponse creates a standardized pagination response with metadata
+func createPaginationResponse(items interface{}, totalCount int64, params PaginationParams) PaginationResponse {
+	totalPages := int64(0)
+	if params.PageSize > 0 {
+		totalPages = (totalCount + int64(params.PageSize) - 1) / int64(params.PageSize)
+	}
+
+	return PaginationResponse{
+		Items:      items,
+		TotalCount: totalCount,
+		TotalPages: totalPages,
+		PageIndex:  params.PageIndex,
+		PageSize:   params.PageSize,
+	}
 }
 
 // parsePaginationParams extracts pagination parameters from the request query string
@@ -131,7 +159,9 @@ func parsePaginationParams(r *http.Request) PaginationParams {
 	offset := (pageIndex - 1) * pageSize
 
 	return PaginationParams{
-		Limit:  int32(limit),
-		Offset: int32(offset),
+		Limit:     int32(limit),
+		Offset:    int32(offset),
+		PageIndex: int32(pageIndex),
+		PageSize:  int32(pageSize),
 	}
 }

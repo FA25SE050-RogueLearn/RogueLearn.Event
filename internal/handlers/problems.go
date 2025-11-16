@@ -3,8 +3,8 @@ package handlers
 import (
 	"net/http"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/response"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/store"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/response"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -20,6 +20,12 @@ type CodeProblemResponse struct {
 func (hr *HandlerRepo) GetProblemsHandler(w http.ResponseWriter, r *http.Request) {
 	pagination := parsePaginationParams(r)
 
+	totalCount, err := hr.queries.CountCodeProblems(r.Context())
+	if err != nil {
+		hr.serverError(w, r, err)
+		return
+	}
+
 	problems, err := hr.queries.GetCodeProblems(r.Context(), store.GetCodeProblemsParams{
 		Limit:  pagination.Limit,
 		Offset: pagination.Offset,
@@ -29,9 +35,11 @@ func (hr *HandlerRepo) GetProblemsHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	paginatedResponse := createPaginationResponse(toProblemResponses(problems), totalCount, pagination)
+
 	err = response.JSON(w, response.JSONResponseParameters{
 		Status:  http.StatusOK,
-		Data:    toProblemResponses(problems),
+		Data:    paginatedResponse,
 		Success: true,
 		Msg:     "Problems retrieved successfully",
 	})
@@ -164,9 +172,17 @@ type TagResponse struct {
 }
 
 func (hr *HandlerRepo) GetTagsHandler(w http.ResponseWriter, r *http.Request) {
+	pagination := parsePaginationParams(r)
+
+	totalCount, err := hr.queries.CountTags(r.Context())
+	if err != nil {
+		hr.serverError(w, r, err)
+		return
+	}
+
 	params := store.GetTagsParams{
-		Limit:  100, // Assuming there won't be more than 100 tags for now
-		Offset: 0,
+		Limit:  pagination.Limit,
+		Offset: pagination.Offset,
 	}
 
 	tags, err := hr.queries.GetTags(r.Context(), params)
@@ -183,9 +199,11 @@ func (hr *HandlerRepo) GetTagsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	paginatedResponse := createPaginationResponse(tagResponses, totalCount, pagination)
+
 	err = response.JSON(w, response.JSONResponseParameters{
 		Status:  http.StatusOK,
-		Data:    tagResponses,
+		Data:    paginatedResponse,
 		Success: true,
 		Msg:     "Tags retrieved successfully",
 	})

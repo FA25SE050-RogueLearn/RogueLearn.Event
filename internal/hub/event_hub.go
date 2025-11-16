@@ -6,17 +6,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/executor"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/rabbitmq"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/events"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
-	pb "github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/protos"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/client/executor"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/client/rabbitmq"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/client/user"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/events"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/store"
+	pb "github.com/FA25SE050-RogueLearn/RogueLearn.Event/protos"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -48,6 +48,7 @@ type EventHub struct {
 
 	rabbitClient   *rabbitmq.RabbitMQClient
 	executorClient *executor.Client
+	userClient     *user.Client
 }
 
 type RoomHub struct {
@@ -65,13 +66,14 @@ type RoomHub struct {
 
 	rabbitClient   *rabbitmq.RabbitMQClient
 	executorClient *executor.Client
+	userClient     *user.Client
 
 	// Track last activity for cleanup purposes
 	lastActivity time.Time
 	activityMu   sync.RWMutex
 }
 
-func NewEventHub(db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client) *EventHub {
+func NewEventHub(db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client, userClient *user.Client) *EventHub {
 	e := EventHub{
 		logger:          logger,
 		queries:         queries,
@@ -82,6 +84,7 @@ func NewEventHub(db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, 
 		EventListeners:  make(map[uuid.UUID]map[uuid.UUID]chan<- events.SseEvent),
 		rabbitClient:    rabbitClient,
 		executorClient:  executorClient,
+		userClient:      userClient,
 	}
 
 	go e.listenForAMQPEvents() // Start the central RabbitMQ listener
@@ -144,9 +147,21 @@ func (e *EventHub) completeEvent(eventID uuid.UUID) {
 
 	e.logger.Info("Attempting to complete event", "event_id", eventID)
 
+	// Start a transaction to ensure atomicity
+	tx, err := e.db.Begin(ctx)
+	if err != nil {
+		e.logger.Error("Failed to start transaction for event completion",
+			"event_id", eventID,
+			"error", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	qtx := e.queries.WithTx(tx)
+
 	// Atomic update: only succeeds if event is 'active'
 	// This prevents duplicate completion if multiple instances fire simultaneously
-	rowsAffected, err := e.queries.UpdateEventStatusToCompleted(ctx, toPgtypeUUID(eventID))
+	rowsAffected, err := qtx.UpdateEventStatusToCompleted(ctx, toPgtypeUUID(eventID))
 	if err != nil {
 		e.logger.Error("Failed to execute update event status to completed",
 			"event_id", eventID,
@@ -157,7 +172,7 @@ func (e *EventHub) completeEvent(eventID uuid.UUID) {
 	// Check if we actually updated the row (compare-and-swap success)
 	if rowsAffected == 0 {
 		// Another instance already completed this event
-		e.logger.Info("Event already completed by another instance, skipping publish",
+		e.logger.Info("Event already completed by another instance, skipping",
 			"event_id", eventID)
 		return
 	}
@@ -165,6 +180,28 @@ func (e *EventHub) completeEvent(eventID uuid.UUID) {
 	e.logger.Info("Successfully marked event as completed in database",
 		"event_id", eventID,
 		"rows_affected", rowsAffected)
+
+	// Update all room player states for this event
+	// present -> completed, disconnected -> left
+	playerRowsAffected, err := qtx.UpdateRoomPlayerStatesOnEventComplete(ctx, toPgtypeUUID(eventID))
+	if err != nil {
+		e.logger.Error("Failed to update room player states on event complete",
+			"event_id", eventID,
+			"error", err)
+		return
+	}
+
+	e.logger.Info("Successfully updated room player states",
+		"event_id", eventID,
+		"players_updated", playerRowsAffected)
+
+	// Commit the transaction
+	if err := tx.Commit(ctx); err != nil {
+		e.logger.Error("Failed to commit event completion transaction",
+			"event_id", eventID,
+			"error", err)
+		return
+	}
 
 	// Create EventExpired message
 	eventExpired := events.EventExpired{
@@ -239,7 +276,7 @@ func (e *EventHub) recoverActiveEvents(ctx context.Context) {
 	e.logger.Info("Event recovery complete", "recovered_count", len(activeEvents))
 }
 
-func newRoomHub(eventID, roomId uuid.UUID, db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, guildUpdateChan chan<- uuid.UUID, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client) *RoomHub {
+func newRoomHub(eventID, roomId uuid.UUID, db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, guildUpdateChan chan<- uuid.UUID, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client, userClient *user.Client) *RoomHub {
 	return &RoomHub{
 		RoomID:          roomId,
 		EventID:         eventID, // Set the eventID
@@ -253,6 +290,7 @@ func newRoomHub(eventID, roomId uuid.UUID, db *pgxpool.Pool, queries *store.Quer
 		guildUpdateChan: guildUpdateChan, // Set the notification channel
 		rabbitClient:    rabbitClient,
 		executorClient:  executorClient,
+		userClient:      userClient,
 		lastActivity:    time.Now(), // Initialize with current time
 		activityMu:      sync.RWMutex{},
 	}
@@ -396,6 +434,7 @@ func (h *EventHub) GetOrCreateRoomHub(ctx context.Context, roomID uuid.UUID) *Ro
 		h.GuildUpdateChan,
 		h.rabbitClient,
 		h.executorClient,
+		h.userClient,
 	)
 
 	// Add to in-memory map
@@ -440,7 +479,7 @@ func (h *EventHub) GetOrCreateRoomHub(ctx context.Context, roomID uuid.UUID) *Ro
 }
 
 func (e *EventHub) CreateRoom(eventID, roomID uuid.UUID, queries *store.Queries) *RoomHub {
-	r := newRoomHub(eventID, roomID, e.db, queries, e.logger, e.GuildUpdateChan, e.rabbitClient, e.executorClient)
+	r := newRoomHub(eventID, roomID, e.db, queries, e.logger, e.GuildUpdateChan, e.rabbitClient, e.executorClient, e.userClient)
 	e.Mu.Lock()
 	e.Rooms[roomID] = r
 
@@ -1231,18 +1270,20 @@ func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 	})
 	if err == pgx.ErrNoRows {
 		r.logger.Info("Player not found in room", "room_id", event.RoomID, "player_id", event.PlayerID)
-		s := rand.NewPCG(uint64(time.Now().UnixNano()), 0)
-		rand := rand.New(s)
-		fmt.Println(rand.IntN(100))
-		playerName := fmt.Sprintf("grpc_called_%d", rand.IntN(100))
-		if err := r.addPlayerToRoom(ctx, event.RoomID, event.PlayerID, playerName); err != nil {
+		userProfile, err := r.userClient.GetUserProfileByAuthId(ctx, &pb.GetUserProfileByAuthIdRequest{
+			AuthUserId: event.PlayerID.String(),
+		})
+		if err != nil {
+			r.logger.Error("Failed to get player username", "player_id", event.PlayerID, "error", err)
+			return err
+		}
+
+		r.logger.Info("retrieved user profile successfully", "player_id", event.PlayerID, "username", userProfile.Username)
+		if err := r.addPlayerToRoom(ctx, event.RoomID, event.PlayerID, userProfile.Username); err != nil {
 			r.logger.Error("Failed to add player to room", "room_id", event.RoomID, "player_id", event.PlayerID, "error", err)
 			return err
 		}
 	}
-
-	// get playername grpc
-	// TODO
 
 	if p.State != store.RoomPlayerStatePresent {
 		if _, err := r.queries.UpdateRoomPlayerState(ctx, store.UpdateRoomPlayerStateParams{

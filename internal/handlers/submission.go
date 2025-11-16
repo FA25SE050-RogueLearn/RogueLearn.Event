@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/events"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/request"
-	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/response"
-	pb "github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/protos"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/events"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/store"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/request"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/response"
+	pb "github.com/FA25SE050-RogueLearn/RogueLearn.Event/protos"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -204,6 +204,15 @@ func (hr *HandlerRepo) GetMySubmissionsHandler(w http.ResponseWriter, r *http.Re
 	// Parse pagination parameters from query string
 	pagination := parsePaginationParams(r)
 
+	// Get total count
+	totalCount, err := hr.queries.CountSubmissionsByUser(r.Context(), toPgtypeUUID(userID))
+	if err != nil {
+		hr.logger.Error("failed to count submissions", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Get paginated data
 	submissions, err := hr.queries.GetSubmissionsByUser(r.Context(), store.GetSubmissionsByUserParams{
 		UserID: toPgtypeUUID(userID),
 		Limit:  pagination.Limit,
@@ -215,9 +224,12 @@ func (hr *HandlerRepo) GetMySubmissionsHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Create pagination response
+	paginatedResponse := createPaginationResponse(hr.toSubmissionResponses(submissions), totalCount, pagination)
+
 	response.JSON(w, response.JSONResponseParameters{
 		Status:  http.StatusOK,
-		Data:    hr.toSubmissionResponses(submissions),
+		Data:    paginatedResponse,
 		Success: true,
 		Msg:     "get submissions successfully",
 	})
