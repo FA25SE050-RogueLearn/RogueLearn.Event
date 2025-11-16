@@ -18,11 +18,12 @@ import (
 )
 
 func (hr *HandlerRepo) GetEventsHandler(w http.ResponseWriter, r *http.Request) {
-	// For now, no pagination.
-	// In the future, we can add helper functions to parse query params for pagination.
+	// Parse pagination parameters from query string
+	pagination := parsePaginationParams(r)
+
 	params := store.GetEventsParams{
-		Limit:  10,
-		Offset: 0,
+		Limit:  pagination.Limit,
+		Offset: pagination.Offset,
 	}
 
 	events, err := hr.queries.GetEvents(r.Context(), params)
@@ -186,10 +187,13 @@ func (hr *HandlerRepo) GetMyEventRequestsHandler(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// Parse pagination parameters from query string
+	pagination := parsePaginationParams(r)
+
 	params := store.ListEventRequestsByGuildParams{
 		RequesterGuildID: toPgtypeUUID(guildID),
-		Limit:            20,
-		Offset:           0,
+		Limit:            pagination.Limit,
+		Offset:           pagination.Offset,
 	}
 
 	requests, err := hr.queries.ListEventRequestsByGuild(r.Context(), params)
@@ -231,12 +235,13 @@ func (hr *HandlerRepo) GetEventRoomsHandler(w http.ResponseWriter, r *http.Reque
 	pgEventID := pgtype.UUID{Bytes: eventID, Valid: true}
 
 	rooms, err := hr.queries.GetRoomsByEvent(r.Context(), pgEventID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			hr.notFound(w, r)
-		} else {
-			hr.serverError(w, r, err)
-		}
+	if err == pgx.ErrNoRows {
+		hr.logger.Info("rooms not found for event", "event_id", eventID)
+		hr.notFound(w, r)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to get rooms for event", "err", err)
+		hr.serverError(w, r, err)
 		return
 	}
 
@@ -276,12 +281,13 @@ func (hr *HandlerRepo) RegisterGuildToEventHandler(w http.ResponseWriter, r *htt
 
 	// Validate that the event exists and is in a valid state for registration
 	event, err := hr.queries.GetEventByID(r.Context(), toPgtypeUUID(eventID))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			hr.notFound(w, r)
-		} else {
-			hr.serverError(w, r, err)
-		}
+	if err == pgx.ErrNoRows {
+		hr.logger.Info("event not found", "event_id", eventID)
+		hr.notFound(w, r)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to get event", "err", err)
+		hr.serverError(w, r, err)
 		return
 	}
 
@@ -311,11 +317,8 @@ func (hr *HandlerRepo) RegisterGuildToEventHandler(w http.ResponseWriter, r *htt
 		GuildID: toPgtypeUUID(guildID),
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			hr.notFound(w, r)
-		} else {
-			hr.serverError(w, r, err)
-		}
+		hr.logger.Error("failed to create event guild participant", "err", err)
+		hr.serverError(w, r, err)
 		return
 	}
 
@@ -355,11 +358,8 @@ type EventRequestResponse struct {
 func (hr *HandlerRepo) GetEventRequestsHandler(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 
-	// Basic pagination
-	params := store.ListEventRequestsParams{
-		Limit:  20,
-		Offset: 0,
-	}
+	// Parse pagination parameters from query string
+	pagination := parsePaginationParams(r)
 
 	var requests []store.EventRequest
 	var err error
@@ -367,11 +367,14 @@ func (hr *HandlerRepo) GetEventRequestsHandler(w http.ResponseWriter, r *http.Re
 	if status != "" {
 		requests, err = hr.queries.ListEventRequestsByStatus(r.Context(), store.ListEventRequestsByStatusParams{
 			Status: store.EventRequestStatus(status),
-			Limit:  params.Limit,
-			Offset: params.Offset,
+			Limit:  pagination.Limit,
+			Offset: pagination.Offset,
 		})
 	} else {
-		requests, err = hr.queries.ListEventRequests(r.Context(), params)
+		requests, err = hr.queries.ListEventRequests(r.Context(), store.ListEventRequestsParams{
+			Limit:  pagination.Limit,
+			Offset: pagination.Offset,
+		})
 	}
 
 	if err != nil {
@@ -420,12 +423,13 @@ func (hr *HandlerRepo) ProcessEventRequestHandler(w http.ResponseWriter, r *http
 
 	// 1. Fetch the original request
 	eventRequest, err := hr.queries.GetEventRequestByID(r.Context(), toPgtypeUUID(requestID))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			hr.notFound(w, r)
-		} else {
-			hr.serverError(w, r, err)
-		}
+	if err == pgx.ErrNoRows {
+		hr.logger.Info("event request not found", "request_id", requestID)
+		hr.notFound(w, r)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to get event request", "err", err)
+		hr.serverError(w, r, err)
 		return
 	}
 

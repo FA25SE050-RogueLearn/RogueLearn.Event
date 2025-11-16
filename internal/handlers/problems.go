@@ -1,13 +1,13 @@
 package handlers
 
 import (
-	"database/sql"
 	"net/http"
 
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/store"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/pkg/response"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 type CodeProblemResponse struct {
@@ -18,14 +18,12 @@ type CodeProblemResponse struct {
 }
 
 func (hr *HandlerRepo) GetProblemsHandler(w http.ResponseWriter, r *http.Request) {
-	// For now, no pagination.
-	// In the future, we can add helper functions to parse query params for pagination.
-	params := store.GetCodeProblemsParams{
-		Limit:  10,
-		Offset: 0,
-	}
+	pagination := parsePaginationParams(r)
 
-	problems, err := hr.queries.GetCodeProblems(r.Context(), params)
+	problems, err := hr.queries.GetCodeProblems(r.Context(), store.GetCodeProblemsParams{
+		Limit:  pagination.Limit,
+		Offset: pagination.Offset,
+	})
 	if err != nil {
 		hr.serverError(w, r, err)
 		return
@@ -51,7 +49,12 @@ func (hr *HandlerRepo) GetProblemHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	problem, err := hr.queries.GetCodeProblemByID(r.Context(), toPgtypeUUID(pIDUID))
-	if err != nil {
+	if err == pgx.ErrNoRows {
+		hr.logger.Info("problem not found", "problem_id", pIDUID)
+		hr.notFound(w, r)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to get code problem", "err", err)
 		hr.serverError(w, r, err)
 		return
 	}
@@ -76,12 +79,12 @@ func (hr *HandlerRepo) GetEventProblemsHandler(w http.ResponseWriter, r *http.Re
 	}
 
 	cps, err := hr.queries.GetEventCodeProblems(r.Context(), toPgtypeUUID(eventIDUID))
-	if err != nil {
-		if err == sql.ErrNoRows {
-			hr.logger.Info("event's code problems not found")
-			hr.notFound(w, r)
-			return
-		}
+	if err == pgx.ErrNoRows {
+		hr.logger.Info("event's code problems not found", "event_id", eventIDUID)
+		hr.notFound(w, r)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to get event code problems", "err", err)
 		hr.serverError(w, r, err)
 		return
 	}
@@ -133,7 +136,11 @@ func (hr *HandlerRepo) GetProblemDetails(w http.ResponseWriter, r *http.Request)
 		Name:          lang,
 	})
 
-	if err != nil {
+	if err == pgx.ErrNoRows {
+		hr.logger.Error("No detail found")
+		hr.notFound(w, r)
+		return
+	} else if err != nil {
 		hr.logger.Error("failed to get code problem language detail", "err", err)
 		hr.serverError(w, r, err)
 		return

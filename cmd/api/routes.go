@@ -22,10 +22,8 @@ func (app *Application) routes() http.Handler {
 			"DELETE",
 			"OPTIONS",
 		},
-		AllowedHeaders: []string{"*"},
-		ExposedHeaders: []string{
-			"Link",
-		},
+		AllowedHeaders:   []string{"*"},
+		ExposedHeaders:   []string{"*"},
 		AllowCredentials: true,
 		MaxAge:           300, // 5 minutes
 	})

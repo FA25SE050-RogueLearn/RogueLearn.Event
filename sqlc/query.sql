@@ -444,7 +444,9 @@ FROM submissions s
 JOIN code_problems cp ON s.code_problem_id = cp.id
 JOIN languages l ON s.language_id = l.id
 WHERE s.user_id = $1
-ORDER BY s.submitted_at DESC;
+ORDER BY s.submitted_at DESC
+LIMIT $2
+OFFSET $3;
 
 -- name: GetSubmissionsByProblem :many
 SELECT s.*, l.name as language_name

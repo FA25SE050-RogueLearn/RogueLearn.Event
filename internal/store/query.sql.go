@@ -2666,7 +2666,15 @@ JOIN code_problems cp ON s.code_problem_id = cp.id
 JOIN languages l ON s.language_id = l.id
 WHERE s.user_id = $1
 ORDER BY s.submitted_at DESC
+LIMIT $2
+OFFSET $3
 `
+
+type GetSubmissionsByUserParams struct {
+	UserID pgtype.UUID
+	Limit  int32
+	Offset int32
+}
 
 type GetSubmissionsByUserRow struct {
 	ID               pgtype.UUID
@@ -2683,8 +2691,8 @@ type GetSubmissionsByUserRow struct {
 	LanguageName     string
 }
 
-func (q *Queries) GetSubmissionsByUser(ctx context.Context, userID pgtype.UUID) ([]GetSubmissionsByUserRow, error) {
-	rows, err := q.db.Query(ctx, getSubmissionsByUser, userID)
+func (q *Queries) GetSubmissionsByUser(ctx context.Context, arg GetSubmissionsByUserParams) ([]GetSubmissionsByUserRow, error) {
+	rows, err := q.db.Query(ctx, getSubmissionsByUser, arg.UserID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}

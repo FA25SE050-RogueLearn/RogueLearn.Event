@@ -15,6 +15,7 @@ import (
 	pb "github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/protos"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -84,10 +85,13 @@ func (hr *HandlerRepo) SubmitHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	lang, err := hr.queries.GetLanguageByName(ctx, req.Language)
-	if err != nil {
-		hr.logger.Error("failed to get language",
-			"lang", req.Language,
-			"err", err)
+	if err == pgx.ErrNoRows {
+		hr.logger.Info("language not found", "language", req.Language)
+		hr.badRequest(w, r, ErrLanguageNotFound)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to get language", "lang", req.Language, "err", err)
+		hr.serverError(w, r, err)
 		return
 	}
 
@@ -95,16 +99,24 @@ func (hr *HandlerRepo) SubmitHandler(w http.ResponseWriter, r *http.Request) {
 		CodeProblemID: toPgtypeUUID(problemIDUID),
 		LanguageID:    lang.ID,
 	})
-	if err != nil {
-		hr.logger.Error("Error", "question", err)
-		hr.badRequest(w, r, ErrInternalServer)
+	if err == pgx.ErrNoRows {
+		hr.logger.Info("problem language detail not found", "problem_id", problemIDUID, "language", req.Language)
+		hr.badRequest(w, r, ErrInvalidProblem)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to get code problem language detail", "err", err)
+		hr.serverError(w, r, err)
 		return
 	}
 
 	testCases, err := hr.queries.GetTestCasesByProblem(ctx, problem.CodeProblemID)
-	if err != nil {
-		hr.logger.Error("failed to get test cases", "problem_id", problem.CodeProblemID)
-		hr.badRequest(w, r, ErrInternalServer)
+	if err == pgx.ErrNoRows {
+		hr.logger.Info("test cases not found for problem", "problem_id", problem.CodeProblemID.Bytes)
+		hr.badRequest(w, r, ErrInvalidProblem)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to get test cases", "problem_id", problem.CodeProblemID.Bytes, "err", err)
+		hr.serverError(w, r, err)
 		return
 	}
 
@@ -189,7 +201,14 @@ func (hr *HandlerRepo) GetMySubmissionsHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	submissions, err := hr.queries.GetSubmissionsByUser(r.Context(), toPgtypeUUID(userID))
+	// Parse pagination parameters from query string
+	pagination := parsePaginationParams(r)
+
+	submissions, err := hr.queries.GetSubmissionsByUser(r.Context(), store.GetSubmissionsByUserParams{
+		UserID: toPgtypeUUID(userID),
+		Limit:  pagination.Limit,
+		Offset: pagination.Offset,
+	})
 	if err != nil {
 		hr.logger.Error("failed to get submissions", "err", err)
 		hr.serverError(w, r, err)

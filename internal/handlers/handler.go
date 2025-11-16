@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"log/slog"
+	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/FA25SE050-RogueLearn/RogueLearn.CodeBattle/internal/client/executor"
@@ -83,4 +85,53 @@ func (hr *HandlerRepo) GetRabbitClient() *rabbitmq.RabbitMQClient {
 
 func (hr *HandlerRepo) GetLogger() *slog.Logger {
 	return hr.logger
+}
+
+// PaginationParams holds the calculated pagination parameters (limit and offset)
+type PaginationParams struct {
+	Limit  int32
+	Offset int32
+}
+
+// parsePaginationParams extracts pagination parameters from the request query string
+// Accepts page_size and page_index, automatically calculates limit and offset
+// Default values: page_size=10, page_index=1
+// Maximum page_size: 100
+// page_index is 1-based (first page is 1, not 0)
+func parsePaginationParams(r *http.Request) PaginationParams {
+	const (
+		defaultPageSize  = 10
+		maxPageSize      = 100
+		defaultPageIndex = 1
+	)
+
+	pageSize := defaultPageSize
+	pageIndex := defaultPageIndex
+
+	// Parse page_size from query parameter
+	if pageSizeStr := r.URL.Query().Get("page_size"); pageSizeStr != "" {
+		if parsedPageSize, err := strconv.Atoi(pageSizeStr); err == nil && parsedPageSize > 0 {
+			pageSize = parsedPageSize
+			// Cap at max page size
+			if pageSize > maxPageSize {
+				pageSize = maxPageSize
+			}
+		}
+	}
+
+	// Parse page_index from query parameter (1-based)
+	if pageIndexStr := r.URL.Query().Get("page_index"); pageIndexStr != "" {
+		if parsedPageIndex, err := strconv.Atoi(pageIndexStr); err == nil && parsedPageIndex >= 1 {
+			pageIndex = parsedPageIndex
+		}
+	}
+
+	// Calculate limit and offset
+	limit := pageSize
+	offset := (pageIndex - 1) * pageSize
+
+	return PaginationParams{
+		Limit:  int32(limit),
+		Offset: int32(offset),
+	}
 }
