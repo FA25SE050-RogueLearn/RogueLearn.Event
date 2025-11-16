@@ -71,7 +71,7 @@ func (q *Queries) CalculateGuildLeaderboard(ctx context.Context, eventID pgtype.
 
 const calculateRoomLeaderboard = `-- name: CalculateRoomLeaderboard :exec
 WITH locked_players AS (
-  -- First, lock the rows
+  -- First, lock the rows without window functions
   SELECT user_id, score, joined_at
   FROM room_players
   WHERE room_id = $1
@@ -2141,17 +2141,21 @@ func (q *Queries) GetPublicTestCasesByProblem(ctx context.Context, codeProblemID
 }
 
 const getRandomCodeProblemsByDifficultyAndTags = `-- name: GetRandomCodeProblemsByDifficultyAndTags :many
-SELECT DISTINCT cp.id, cp.title, cp.problem_statement, cp.difficulty, cp.created_at
+SELECT cp.id, cp.title, cp.problem_statement, cp.difficulty, cp.created_at
 FROM code_problems cp
-INNER JOIN code_problem_tags cpt ON cp.id = cpt.code_problem_id
-WHERE
-  cp.difficulty = $1::int
-  AND (
-    $2::uuid[] IS NULL
-    OR $2::uuid[] = '{}'
-    OR cpt.tag_id = ANY($2::uuid[])
-  )
-  AND NOT (cp.id = ANY($3::uuid[]))
+WHERE cp.id IN (
+  SELECT DISTINCT cp2.id
+  FROM code_problems cp2
+  INNER JOIN code_problem_tags cpt ON cp2.id = cpt.code_problem_id
+  WHERE
+    cp2.difficulty = $1::int
+    AND (
+      $2::uuid[] IS NULL
+      OR $2::uuid[] = '{}'
+      OR cpt.tag_id = ANY($2::uuid[])
+    )
+    AND NOT (cp2.id = ANY($3::uuid[]))
+)
 ORDER BY RANDOM()
 LIMIT $4
 `
@@ -3260,7 +3264,7 @@ func (q *Queries) UpdateEventStatusToActive(ctx context.Context, id pgtype.UUID)
 	return i, err
 }
 
-const updateEventStatusToCompleted = `-- name: UpdateEventStatusToCompleted :exec
+const updateEventStatusToCompleted = `-- name: UpdateEventStatusToCompleted :execrows
 UPDATE events
 SET status = 'completed'
 WHERE id = $1 AND status = 'active'
@@ -3268,9 +3272,13 @@ WHERE id = $1 AND status = 'active'
 
 // Atomically mark event as 'completed' (only if still 'active')
 // Used by event expiry timer - atomic update prevents duplicate completion
-func (q *Queries) UpdateEventStatusToCompleted(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, updateEventStatusToCompleted, id)
-	return err
+// Returns number of rows affected (1 = success, 0 = already completed)
+func (q *Queries) UpdateEventStatusToCompleted(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, updateEventStatusToCompleted, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateGuildLeaderboardEntry = `-- name: UpdateGuildLeaderboardEntry :one

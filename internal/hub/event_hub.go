@@ -146,16 +146,25 @@ func (e *EventHub) completeEvent(eventID uuid.UUID) {
 
 	// Atomic update: only succeeds if event is 'active'
 	// This prevents duplicate completion if multiple instances fire simultaneously
-	err := e.queries.UpdateEventStatusToCompleted(ctx, toPgtypeUUID(eventID))
+	rowsAffected, err := e.queries.UpdateEventStatusToCompleted(ctx, toPgtypeUUID(eventID))
 	if err != nil {
-		e.logger.Error("Failed to update event status to completed",
+		e.logger.Error("Failed to execute update event status to completed",
 			"event_id", eventID,
 			"error", err)
-		// If update fails (event already completed by another instance), don't publish to RabbitMQ
 		return
 	}
 
-	e.logger.Info("Successfully marked event as completed in database", "event_id", eventID)
+	// Check if we actually updated the row (compare-and-swap success)
+	if rowsAffected == 0 {
+		// Another instance already completed this event
+		e.logger.Info("Event already completed by another instance, skipping publish",
+			"event_id", eventID)
+		return
+	}
+
+	e.logger.Info("Successfully marked event as completed in database",
+		"event_id", eventID,
+		"rows_affected", rowsAffected)
 
 	// Create EventExpired message
 	eventExpired := events.EventExpired{
@@ -604,7 +613,7 @@ func (e *EventHub) handleEventMessage(eventID uuid.UUID, sseEvent events.SseEven
 
 				// Non-blocking send to room's event channel
 				select {
-				case roomHub.Events <- sseEvent.Data:
+				case roomHub.Listerners[roomID] <- sseEvent:
 					affectedRooms++
 				default:
 					e.logger.Warn("Room event channel full, skipping",
@@ -681,31 +690,9 @@ func (r *RoomHub) Start() {
 			}
 
 		case events.EventExpired:
-			// Event has expired, broadcast to all connected players
-			r.logger.Info("Event expired, broadcasting to room players",
-				"event_id", e.EventID,
-				"room_id", r.RoomID)
-
-			sseEvent := events.SseEvent{
-				EventType: events.EVENT_EXPIRED,
-				Data:      e,
+			if err := r.processEventExpired(e); err != nil {
+				r.logger.Error("failed to process event expired event", "error", err)
 			}
-
-			r.Mu.RLock()
-			for playerID, ch := range r.Listerners {
-				select {
-				case ch <- sseEvent:
-					r.logger.Info("Sent event expired to player", "player_id", playerID)
-				default:
-					r.logger.Warn("Player channel full, could not send event expired",
-						"player_id", playerID)
-				}
-			}
-			r.Mu.RUnlock()
-
-			r.logger.Info("Event expired broadcast complete",
-				"room_id", r.RoomID,
-				"players_notified", len(r.Listerners))
 		}
 	}
 }
@@ -1223,6 +1210,21 @@ func (r *RoomHub) getRoomLeaderboardEntries(ctx context.Context) ([]RoomLeaderbo
 func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 	ctx := context.Background()
 
+	eventDetails, err := r.queries.GetEventByID(ctx, toPgtypeUUID(event.EventID))
+	if err != nil {
+		r.logger.Error("Failed to get event details", "event_id", event.EventID, "error", err)
+		return err
+	}
+
+	if eventDetails.EndDate.Time.Before(time.Now()) {
+		sseEvent := events.SseEvent{
+			EventType: events.EVENT_ENDED,
+		}
+
+		r.dispatchEventToPlayer(sseEvent, event.PlayerID)
+		return err
+	}
+
 	p, err := r.queries.GetRoomPlayer(ctx, store.GetRoomPlayerParams{
 		RoomID: toPgtypeUUID(event.RoomID),
 		UserID: toPgtypeUUID(event.PlayerID),
@@ -1240,6 +1242,7 @@ func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 	}
 
 	// get playername grpc
+	// TODO
 
 	if p.State != store.RoomPlayerStatePresent {
 		if _, err := r.queries.UpdateRoomPlayerState(ctx, store.UpdateRoomPlayerStateParams{
@@ -1282,37 +1285,28 @@ func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 
 	// Send time remaining to the player who just joined
 	// This is only sent on successful join
-	eventDetails, err := r.queries.GetEventByID(ctx, toPgtypeUUID(event.EventID))
-	if err != nil {
-		r.logger.Error("Failed to get event details for time remaining",
-			"event_id", event.EventID,
-			"player_id", event.PlayerID,
-			"error", err)
-		// Don't fail the join if we can't get time remaining
-	} else {
-		remaining := time.Until(eventDetails.EndDate.Time)
-		if remaining > 0 {
-			initialTime := map[string]any{
-				"event_id":       event.EventID.String(),
-				"end_date":       eventDetails.EndDate.Time.Format(time.RFC3339),
-				"seconds_left":   int64(remaining.Seconds()),
-				"formatted_time": formatDuration(remaining),
-				"server_time":    time.Now().Format(time.RFC3339),
-			}
-
-			// Send time remaining directly to the player who joined
-			timeRemainingEvent := events.SseEvent{
-				EventType: "initial_time",
-				Data:      initialTime,
-			}
-
-			r.dispatchEventToPlayer(timeRemainingEvent, event.PlayerID)
-
-			r.logger.Info("Sent time remaining to player after successful join",
-				"player_id", event.PlayerID,
-				"event_id", event.EventID,
-				"seconds_left", int64(remaining.Seconds()))
+	remaining := time.Until(eventDetails.EndDate.Time)
+	if remaining > 0 {
+		initialTime := map[string]any{
+			"event_id":       event.EventID.String(),
+			"end_date":       eventDetails.EndDate.Time.Format(time.RFC3339),
+			"seconds_left":   int64(remaining.Seconds()),
+			"formatted_time": formatDuration(remaining),
+			"server_time":    time.Now().Format(time.RFC3339),
 		}
+
+		// Send time remaining directly to the player who joined
+		timeRemainingEvent := events.SseEvent{
+			EventType: "initial_time",
+			Data:      initialTime,
+		}
+
+		r.dispatchEventToPlayer(timeRemainingEvent, event.PlayerID)
+
+		r.logger.Info("Sent time remaining to player after successful join",
+			"player_id", event.PlayerID,
+			"event_id", event.EventID,
+			"seconds_left", int64(remaining.Seconds()))
 	}
 
 	return nil
@@ -1391,6 +1385,43 @@ func (r *RoomHub) processRoomDeleted(event events.RoomDeleted) error {
 	r.logger.Info("room deleted", "roomID", event.RoomID)
 
 	go r.dispatchEvent(sseEvent)
+
+	return nil
+}
+
+// processEventExpired handles event expiry notification to all players in the room.
+// This is called when an event expires and needs to notify all connected players.
+// Note: This function only dispatches locally to players on this instance.
+// The EventExpired message is published to RabbitMQ by completeEvent() in EventHub,
+// ensuring all instances receive and process it.
+func (r *RoomHub) processEventExpired(event events.EventExpired) error {
+	r.logger.Info("Event expired, broadcasting to room players",
+		"event_id", event.EventID,
+		"room_id", r.RoomID)
+
+	sseEvent := events.SseEvent{
+		EventType: events.EVENT_EXPIRED,
+		Data:      event,
+	}
+
+	// Broadcast to all connected players in this room on this instance
+	r.Mu.RLock()
+	playersNotified := 0
+	for playerID, ch := range r.Listerners {
+		select {
+		case ch <- sseEvent:
+			r.logger.Info("Sent event expired to player", "player_id", playerID)
+			playersNotified++
+		default:
+			r.logger.Warn("Player channel full, could not send event expired",
+				"player_id", playerID)
+		}
+	}
+	r.Mu.RUnlock()
+
+	r.logger.Info("Event expired broadcast complete",
+		"room_id", r.RoomID,
+		"players_notified", playersNotified)
 
 	return nil
 }

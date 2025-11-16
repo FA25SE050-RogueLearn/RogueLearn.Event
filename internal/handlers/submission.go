@@ -173,7 +173,6 @@ func (hr *HandlerRepo) SubmitHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (hr *HandlerRepo) GetMySubmissionsHandler(w http.ResponseWriter, r *http.Request) {
-
 	userClaims, err := GetUserClaims(r.Context())
 	if err != nil {
 		hr.logger.Error("failed to get user claims", "err", err)

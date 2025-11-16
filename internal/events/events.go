@@ -15,6 +15,7 @@ const (
 	PLAYER_JOINED              EventType = "PLAYER_JOINED"
 	PLAYER_LEFT                EventType = "PLAYER_LEFT"
 	ROOM_DELETED               EventType = "ROOM_DELETED"
+	EVENT_ENDED                EventType = "EVENT_ENDED"
 	COMPILATION_TEST           EventType = "COMPILATION_TEST"
 	LEADERBOARD_UPDATED        EventType = "LEADERBOARD_UPDATED"
 	GUILD_LEADERBOARD_UPDATED  EventType = "GUILD_LEADERBOARD_UPDATED"

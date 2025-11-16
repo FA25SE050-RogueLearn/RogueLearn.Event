@@ -149,17 +149,21 @@ OFFSET sqlc.arg(offset_count);
 -- name: GetRandomCodeProblemsByDifficultyAndTags :many
 -- Randomly select code problems based on difficulty and tag IDs
 -- This is optimized for event problem assignment
-SELECT DISTINCT cp.*
+SELECT cp.*
 FROM code_problems cp
-INNER JOIN code_problem_tags cpt ON cp.id = cpt.code_problem_id
-WHERE
-  cp.difficulty = sqlc.arg(difficulty)::int
-  AND (
-    sqlc.arg(tag_ids)::uuid[] IS NULL
-    OR sqlc.arg(tag_ids)::uuid[] = '{}'
-    OR cpt.tag_id = ANY(sqlc.arg(tag_ids)::uuid[])
-  )
-  AND NOT (cp.id = ANY(sqlc.arg(excluded_problem_ids)::uuid[]))
+WHERE cp.id IN (
+  SELECT DISTINCT cp2.id
+  FROM code_problems cp2
+  INNER JOIN code_problem_tags cpt ON cp2.id = cpt.code_problem_id
+  WHERE
+    cp2.difficulty = sqlc.arg(difficulty)::int
+    AND (
+      sqlc.arg(tag_ids)::uuid[] IS NULL
+      OR sqlc.arg(tag_ids)::uuid[] = '{}'
+      OR cpt.tag_id = ANY(sqlc.arg(tag_ids)::uuid[])
+    )
+    AND NOT (cp2.id = ANY(sqlc.arg(excluded_problem_ids)::uuid[]))
+)
 ORDER BY RANDOM()
 LIMIT sqlc.arg(limit_count);
 
@@ -707,9 +711,10 @@ SET status = 'active'
 WHERE id = $1 AND status = 'pending'
 RETURNING *;
 
--- name: UpdateEventStatusToCompleted :exec
+-- name: UpdateEventStatusToCompleted :execrows
 -- Atomically mark event as 'completed' (only if still 'active')
 -- Used by event expiry timer - atomic update prevents duplicate completion
+-- Returns number of rows affected (1 = success, 0 = already completed)
 UPDATE events
 SET status = 'completed'
 WHERE id = $1 AND status = 'active';
