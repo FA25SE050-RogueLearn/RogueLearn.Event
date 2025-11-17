@@ -941,6 +941,68 @@ func (r *RoomHub) processSolutionResult(event events.SolutionResult) error {
 
 	r.logger.Info("processing solution result...", "submission_id", event.SolutionSubmitted.SubmissionID)
 
+	// CRITICAL FIX: Validate event is still active before processing solution
+	// This prevents race condition where timer completes event while submission is being processed
+	// See: Race Condition Timeline in docs - submission can be in-flight when event expires
+	eventDetails, err := r.queries.GetEventByID(ctx, toPgtypeUUID(r.EventID))
+	if err != nil {
+		r.logger.Error("Failed to get event details during solution processing",
+			"event_id", r.EventID,
+			"submission_id", event.SolutionSubmitted.SubmissionID,
+			"error", err)
+		return fmt.Errorf("failed to get event: %w", err)
+	}
+
+	// Check 1: Event status must be 'active'
+	// If status changed to 'completed', reject this submission even if solution is correct
+	if eventDetails.Status != store.EventStatusActive {
+		r.logger.Warn("Rejecting solution result - event is not active",
+			"event_id", r.EventID,
+			"event_status", eventDetails.Status,
+			"submission_id", event.SolutionSubmitted.SubmissionID,
+			"player_id", event.SolutionSubmitted.PlayerID,
+			"was_correct", event.Status == events.Accepted)
+
+		// Update submission status to indicate it was rejected due to event completion
+		// We still record the submission but don't award points
+		_, updateErr := r.queries.UpdateSubmission(ctx, store.UpdateSubmissionParams{
+			ID:     toPgtypeUUID(event.SolutionSubmitted.SubmissionID),
+			Status: store.SubmissionStatusPending, // Mark as pending since it wasn't scored
+		})
+		if updateErr != nil {
+			r.logger.Error("Failed to update submission status for rejected late submission",
+				"submission_id", event.SolutionSubmitted.SubmissionID,
+				"error", updateErr)
+		}
+
+		return fmt.Errorf("event is not active (status: %s)", eventDetails.Status)
+	}
+
+	// Check 2: Current time must be before end_date
+	// Double-check time validation to handle clock skew between instances
+	if time.Now().After(eventDetails.EndDate.Time) {
+		r.logger.Warn("Rejecting solution result - event has expired",
+			"event_id", r.EventID,
+			"end_date", eventDetails.EndDate.Time,
+			"current_time", time.Now(),
+			"submission_id", event.SolutionSubmitted.SubmissionID,
+			"player_id", event.SolutionSubmitted.PlayerID,
+			"time_past_deadline", time.Since(eventDetails.EndDate.Time))
+
+		// Update submission status
+		_, updateErr := r.queries.UpdateSubmission(ctx, store.UpdateSubmissionParams{
+			ID:     toPgtypeUUID(event.SolutionSubmitted.SubmissionID),
+			Status: store.SubmissionStatusPending,
+		})
+		if updateErr != nil {
+			r.logger.Error("Failed to update submission status for expired submission",
+				"submission_id", event.SolutionSubmitted.SubmissionID,
+				"error", updateErr)
+		}
+
+		return fmt.Errorf("event has expired at %s (now: %s)", eventDetails.EndDate.Time, time.Now())
+	}
+
 	if event.Status != events.Accepted {
 		r.logger.Info("solution failed", "event", event)
 
@@ -998,6 +1060,42 @@ func (r *RoomHub) processSolutionResult(event events.SolutionResult) error {
 
 	// Create query runner that executes within this transaction
 	qtx := r.queries.WithTx(tx)
+
+	// CRITICAL: Perform duplicate check INSIDE transaction to prevent race condition
+	// This ensures atomicity - if two submissions arrive simultaneously, only one will succeed
+	// The check in HTTP handler is a first-pass filter, but this is the authoritative check
+	existingSolution, err := qtx.CheckIfProblemAlreadySolved(ctx, store.CheckIfProblemAlreadySolvedParams{
+		UserID:        toPgtypeUUID(event.SolutionSubmitted.PlayerID),
+		CodeProblemID: toPgtypeUUID(event.SolutionSubmitted.ProblemID),
+		RoomID:        toPgtypeUUID(event.SolutionSubmitted.RoomID),
+	})
+
+	if err == nil {
+		// Problem already solved within transaction - another submission beat us
+		r.logger.Warn("Duplicate solution detected during transaction - rejecting",
+			"player_id", event.SolutionSubmitted.PlayerID,
+			"problem_id", event.SolutionSubmitted.ProblemID,
+			"room_id", r.RoomID,
+			"original_submission_id", existingSolution.ID,
+			"duplicate_submission_id", event.SolutionSubmitted.SubmissionID,
+			"solved_at", existingSolution.SubmittedAt)
+
+		// Update the current submission to mark it as duplicate (don't award points)
+		_, updateErr := qtx.UpdateSubmission(ctx, store.UpdateSubmissionParams{
+			ID:     toPgtypeUUID(event.SolutionSubmitted.SubmissionID),
+			Status: store.SubmissionStatusPending, // Mark as pending to indicate it wasn't scored
+		})
+		if updateErr != nil {
+			r.logger.Error("Failed to update duplicate submission status",
+				"submission_id", event.SolutionSubmitted.SubmissionID,
+				"error", updateErr)
+		}
+
+		// Rollback transaction (no points awarded)
+		tx.Rollback(ctx)
+		return fmt.Errorf("problem already solved by player in this room")
+	}
+	// If error is pgx.ErrNoRows, that's expected - problem not solved yet, continue
 
 	// Update player score within transaction
 	err = qtx.AddRoomPlayerScore(ctx, store.AddRoomPlayerScoreParams{

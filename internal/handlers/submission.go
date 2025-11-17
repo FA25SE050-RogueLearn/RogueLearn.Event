@@ -360,9 +360,49 @@ func (hr *HandlerRepo) SubmitInRoomHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// CRITICAL: Validate event is still active and hasn't expired
+	// This prevents submissions from being accepted after the event has ended
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	eventDetails, err := hr.queries.GetEventByID(ctx, toPgtypeUUID(eventID))
+	if err != nil {
+		hr.logger.Error("Failed to get event details for validation",
+			"event_id", eventID,
+			"error", err)
+		hr.notFound(w, r)
+		return
+	}
+
+	// Check 1: Event status must be 'active'
+	if eventDetails.Status != store.EventStatusActive {
+		hr.logger.Warn("Submission rejected - event is not active",
+			"event_id", eventID,
+			"event_status", eventDetails.Status,
+			"player_id", playerID,
+			"problem_id", problemID)
+		hr.errorMessage(w, r, http.StatusForbidden,
+			"This event is not currently active. Submissions are not allowed.", nil)
+		return
+	}
+
+	// Check 2: Current time must be before end_date
+	// Use server time to prevent client clock manipulation
+	if time.Now().After(eventDetails.EndDate.Time) {
+		hr.logger.Warn("Submission rejected - event has expired",
+			"event_id", eventID,
+			"end_date", eventDetails.EndDate.Time,
+			"current_time", time.Now(),
+			"player_id", playerID,
+			"problem_id", problemID)
+		hr.errorMessage(w, r, http.StatusForbidden,
+			"This event has ended. Submissions are no longer accepted.", nil)
+		return
+	}
+
 	// CRITICAL: Check if player has already solved this problem
 	// Prevent duplicate submissions and point farming
-	existingSolution, err := hr.queries.CheckIfProblemAlreadySolved(r.Context(), store.CheckIfProblemAlreadySolvedParams{
+	existingSolution, err := hr.queries.CheckIfProblemAlreadySolved(ctx, store.CheckIfProblemAlreadySolvedParams{
 		UserID:        pgtype.UUID{Bytes: playerID, Valid: true},
 		CodeProblemID: pgtype.UUID{Bytes: problemID, Valid: true},
 		RoomID:        pgtype.UUID{Bytes: roomID, Valid: true},
