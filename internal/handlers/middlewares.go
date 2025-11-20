@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -92,10 +93,12 @@ func GetUserID(ctx context.Context) (string, error) {
 func HasRole(ctx context.Context, role string) bool {
 	claims, err := GetUserClaims(ctx)
 	if err != nil {
+		fmt.Println(err)
 		return false
 	}
 
 	for _, r := range claims.Roles {
+		fmt.Println(r)
 		if strings.EqualFold(r, role) {
 			return true
 		}

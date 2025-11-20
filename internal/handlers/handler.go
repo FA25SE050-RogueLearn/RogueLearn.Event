@@ -98,11 +98,11 @@ type PaginationParams struct {
 
 // PaginationResponse wraps paginated data with metadata
 type PaginationResponse struct {
-	Items      interface{} `json:"items"`
-	TotalCount int64       `json:"total_count"`
-	TotalPages int64       `json:"total_pages"`
-	PageIndex  int32       `json:"page_index"`
-	PageSize   int32       `json:"page_size"`
+	Items      any   `json:"items"`
+	TotalCount int64 `json:"total_count"`
+	TotalPages int64 `json:"total_pages"`
+	PageIndex  int32 `json:"page_index"`
+	PageSize   int32 `json:"page_size"`
 }
 
 // createPaginationResponse creates a standardized pagination response with metadata

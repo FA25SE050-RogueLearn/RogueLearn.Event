@@ -31,12 +31,12 @@ func (app *Application) routes() http.Handler {
 
 	mux.Route("/events", func(r chi.Router) {
 		// Public routes for events
-		r.Get("/", app.handlers.GetEventsHandler)
-		r.Get("/{event_id}/rooms", app.handlers.GetEventRoomsHandler)
 
 		// Auth-protected routes for event interaction
 		r.Group(func(r chi.Router) {
 			r.Use(app.handlers.AuthMiddleware)
+			r.Get("/", app.handlers.GetEventsHandler)
+			r.Get("/{event_id}/rooms", app.handlers.GetEventRoomsHandler)
 			r.Post("/{event_id}/guilds/{guild_id}/register", app.handlers.RegisterGuildToEventHandler)
 			r.Get("/{event_id}/problems", app.handlers.GetEventProblemsHandler)
 			r.Get("/{event_id}/sse", app.handlers.SpectateEventHandler)

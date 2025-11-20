@@ -1559,6 +1559,154 @@ func (x *RevokeAchievementFromUserRequest) GetAchievementId() string {
 	return ""
 }
 
+type GrantAchievementsRequest struct {
+	state            protoimpl.MessageState  `protogen:"open.v1"`
+	UserAchievements []*UserAchievementGrant `protobuf:"bytes,1,rep,name=user_achievements,json=userAchievements,proto3" json:"user_achievements,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *GrantAchievementsRequest) Reset() {
+	*x = GrantAchievementsRequest{}
+	mi := &file_user_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantAchievementsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantAchievementsRequest) ProtoMessage() {}
+
+func (x *GrantAchievementsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_user_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantAchievementsRequest.ProtoReflect.Descriptor instead.
+func (*GrantAchievementsRequest) Descriptor() ([]byte, []int) {
+	return file_user_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *GrantAchievementsRequest) GetUserAchievements() []*UserAchievementGrant {
+	if x != nil {
+		return x.UserAchievements
+	}
+	return nil
+}
+
+type UserAchievementGrant struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	UserId         string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	AchievementKey string                 `protobuf:"bytes,2,opt,name=achievement_key,json=achievementKey,proto3" json:"achievement_key,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *UserAchievementGrant) Reset() {
+	*x = UserAchievementGrant{}
+	mi := &file_user_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserAchievementGrant) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserAchievementGrant) ProtoMessage() {}
+
+func (x *UserAchievementGrant) ProtoReflect() protoreflect.Message {
+	mi := &file_user_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserAchievementGrant.ProtoReflect.Descriptor instead.
+func (*UserAchievementGrant) Descriptor() ([]byte, []int) {
+	return file_user_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *UserAchievementGrant) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *UserAchievementGrant) GetAchievementKey() string {
+	if x != nil {
+		return x.AchievementKey
+	}
+	return ""
+}
+
+type GrantAchievementsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	GrantedCount  int32                  `protobuf:"varint,1,opt,name=granted_count,json=grantedCount,proto3" json:"granted_count,omitempty"`
+	Errors        []string               `protobuf:"bytes,2,rep,name=errors,proto3" json:"errors,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GrantAchievementsResponse) Reset() {
+	*x = GrantAchievementsResponse{}
+	mi := &file_user_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantAchievementsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantAchievementsResponse) ProtoMessage() {}
+
+func (x *GrantAchievementsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_user_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantAchievementsResponse.ProtoReflect.Descriptor instead.
+func (*GrantAchievementsResponse) Descriptor() ([]byte, []int) {
+	return file_user_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *GrantAchievementsResponse) GetGrantedCount() int32 {
+	if x != nil {
+		return x.GrantedCount
+	}
+	return 0
+}
+
+func (x *GrantAchievementsResponse) GetErrors() []string {
+	if x != nil {
+		return x.Errors
+	}
+	return nil
+}
+
 type GetUserAchievementsByAuthUserIdRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	AuthUserId    string                 `protobuf:"bytes,1,opt,name=auth_user_id,json=authUserId,proto3" json:"auth_user_id,omitempty"`
@@ -1568,7 +1716,7 @@ type GetUserAchievementsByAuthUserIdRequest struct {
 
 func (x *GetUserAchievementsByAuthUserIdRequest) Reset() {
 	*x = GetUserAchievementsByAuthUserIdRequest{}
-	mi := &file_user_proto_msgTypes[20]
+	mi := &file_user_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1580,7 +1728,7 @@ func (x *GetUserAchievementsByAuthUserIdRequest) String() string {
 func (*GetUserAchievementsByAuthUserIdRequest) ProtoMessage() {}
 
 func (x *GetUserAchievementsByAuthUserIdRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[20]
+	mi := &file_user_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1593,7 +1741,7 @@ func (x *GetUserAchievementsByAuthUserIdRequest) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use GetUserAchievementsByAuthUserIdRequest.ProtoReflect.Descriptor instead.
 func (*GetUserAchievementsByAuthUserIdRequest) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{20}
+	return file_user_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *GetUserAchievementsByAuthUserIdRequest) GetAuthUserId() string {
@@ -1619,7 +1767,7 @@ type UserAchievement struct {
 
 func (x *UserAchievement) Reset() {
 	*x = UserAchievement{}
-	mi := &file_user_proto_msgTypes[21]
+	mi := &file_user_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1631,7 +1779,7 @@ func (x *UserAchievement) String() string {
 func (*UserAchievement) ProtoMessage() {}
 
 func (x *UserAchievement) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[21]
+	mi := &file_user_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1644,7 +1792,7 @@ func (x *UserAchievement) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserAchievement.ProtoReflect.Descriptor instead.
 func (*UserAchievement) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{21}
+	return file_user_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *UserAchievement) GetAchievementId() string {
@@ -1712,7 +1860,7 @@ type UserAchievementList struct {
 
 func (x *UserAchievementList) Reset() {
 	*x = UserAchievementList{}
-	mi := &file_user_proto_msgTypes[22]
+	mi := &file_user_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1724,7 +1872,7 @@ func (x *UserAchievementList) String() string {
 func (*UserAchievementList) ProtoMessage() {}
 
 func (x *UserAchievementList) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[22]
+	mi := &file_user_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1737,7 +1885,7 @@ func (x *UserAchievementList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserAchievementList.ProtoReflect.Descriptor instead.
 func (*UserAchievementList) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{22}
+	return file_user_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *UserAchievementList) GetAchievements() []*UserAchievement {
@@ -1756,7 +1904,7 @@ type GetGuildByIdRequest struct {
 
 func (x *GetGuildByIdRequest) Reset() {
 	*x = GetGuildByIdRequest{}
-	mi := &file_user_proto_msgTypes[23]
+	mi := &file_user_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1768,7 +1916,7 @@ func (x *GetGuildByIdRequest) String() string {
 func (*GetGuildByIdRequest) ProtoMessage() {}
 
 func (x *GetGuildByIdRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[23]
+	mi := &file_user_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1781,7 +1929,7 @@ func (x *GetGuildByIdRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGuildByIdRequest.ProtoReflect.Descriptor instead.
 func (*GetGuildByIdRequest) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{23}
+	return file_user_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GetGuildByIdRequest) GetGuildId() string {
@@ -1807,7 +1955,7 @@ type Guild struct {
 
 func (x *Guild) Reset() {
 	*x = Guild{}
-	mi := &file_user_proto_msgTypes[24]
+	mi := &file_user_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1819,7 +1967,7 @@ func (x *Guild) String() string {
 func (*Guild) ProtoMessage() {}
 
 func (x *Guild) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[24]
+	mi := &file_user_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1832,7 +1980,7 @@ func (x *Guild) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Guild.ProtoReflect.Descriptor instead.
 func (*Guild) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{24}
+	return file_user_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *Guild) GetId() string {
@@ -1900,7 +2048,7 @@ type GetAllGuildsRequest struct {
 
 func (x *GetAllGuildsRequest) Reset() {
 	*x = GetAllGuildsRequest{}
-	mi := &file_user_proto_msgTypes[25]
+	mi := &file_user_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1912,7 +2060,7 @@ func (x *GetAllGuildsRequest) String() string {
 func (*GetAllGuildsRequest) ProtoMessage() {}
 
 func (x *GetAllGuildsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[25]
+	mi := &file_user_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1925,7 +2073,7 @@ func (x *GetAllGuildsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAllGuildsRequest.ProtoReflect.Descriptor instead.
 func (*GetAllGuildsRequest) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{25}
+	return file_user_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *GetAllGuildsRequest) GetIncludePrivate() bool {
@@ -1944,7 +2092,7 @@ type GuildList struct {
 
 func (x *GuildList) Reset() {
 	*x = GuildList{}
-	mi := &file_user_proto_msgTypes[26]
+	mi := &file_user_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1956,7 +2104,7 @@ func (x *GuildList) String() string {
 func (*GuildList) ProtoMessage() {}
 
 func (x *GuildList) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[26]
+	mi := &file_user_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1969,7 +2117,7 @@ func (x *GuildList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GuildList.ProtoReflect.Descriptor instead.
 func (*GuildList) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{26}
+	return file_user_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GuildList) GetItems() []*Guild {
@@ -1988,7 +2136,7 @@ type GetGuildInvitationsRequest struct {
 
 func (x *GetGuildInvitationsRequest) Reset() {
 	*x = GetGuildInvitationsRequest{}
-	mi := &file_user_proto_msgTypes[27]
+	mi := &file_user_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2000,7 +2148,7 @@ func (x *GetGuildInvitationsRequest) String() string {
 func (*GetGuildInvitationsRequest) ProtoMessage() {}
 
 func (x *GetGuildInvitationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[27]
+	mi := &file_user_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2013,7 +2161,7 @@ func (x *GetGuildInvitationsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGuildInvitationsRequest.ProtoReflect.Descriptor instead.
 func (*GetGuildInvitationsRequest) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{27}
+	return file_user_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *GetGuildInvitationsRequest) GetGuildId() string {
@@ -2043,7 +2191,7 @@ type GuildInvitation struct {
 
 func (x *GuildInvitation) Reset() {
 	*x = GuildInvitation{}
-	mi := &file_user_proto_msgTypes[28]
+	mi := &file_user_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2055,7 +2203,7 @@ func (x *GuildInvitation) String() string {
 func (*GuildInvitation) ProtoMessage() {}
 
 func (x *GuildInvitation) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[28]
+	mi := &file_user_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2068,7 +2216,7 @@ func (x *GuildInvitation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GuildInvitation.ProtoReflect.Descriptor instead.
 func (*GuildInvitation) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{28}
+	return file_user_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *GuildInvitation) GetId() string {
@@ -2164,7 +2312,7 @@ type GuildInvitationList struct {
 
 func (x *GuildInvitationList) Reset() {
 	*x = GuildInvitationList{}
-	mi := &file_user_proto_msgTypes[29]
+	mi := &file_user_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2176,7 +2324,7 @@ func (x *GuildInvitationList) String() string {
 func (*GuildInvitationList) ProtoMessage() {}
 
 func (x *GuildInvitationList) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[29]
+	mi := &file_user_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2189,7 +2337,7 @@ func (x *GuildInvitationList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GuildInvitationList.ProtoReflect.Descriptor instead.
 func (*GuildInvitationList) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{29}
+	return file_user_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *GuildInvitationList) GetItems() []*GuildInvitation {
@@ -2209,7 +2357,7 @@ type GetGuildJoinRequestsRequest struct {
 
 func (x *GetGuildJoinRequestsRequest) Reset() {
 	*x = GetGuildJoinRequestsRequest{}
-	mi := &file_user_proto_msgTypes[30]
+	mi := &file_user_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2221,7 +2369,7 @@ func (x *GetGuildJoinRequestsRequest) String() string {
 func (*GetGuildJoinRequestsRequest) ProtoMessage() {}
 
 func (x *GetGuildJoinRequestsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[30]
+	mi := &file_user_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2234,7 +2382,7 @@ func (x *GetGuildJoinRequestsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGuildJoinRequestsRequest.ProtoReflect.Descriptor instead.
 func (*GetGuildJoinRequestsRequest) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{30}
+	return file_user_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *GetGuildJoinRequestsRequest) GetGuildId() string {
@@ -2267,7 +2415,7 @@ type GuildJoinRequest struct {
 
 func (x *GuildJoinRequest) Reset() {
 	*x = GuildJoinRequest{}
-	mi := &file_user_proto_msgTypes[31]
+	mi := &file_user_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2279,7 +2427,7 @@ func (x *GuildJoinRequest) String() string {
 func (*GuildJoinRequest) ProtoMessage() {}
 
 func (x *GuildJoinRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[31]
+	mi := &file_user_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2292,7 +2440,7 @@ func (x *GuildJoinRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GuildJoinRequest.ProtoReflect.Descriptor instead.
 func (*GuildJoinRequest) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{31}
+	return file_user_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *GuildJoinRequest) GetId() string {
@@ -2360,7 +2508,7 @@ type GuildJoinRequestList struct {
 
 func (x *GuildJoinRequestList) Reset() {
 	*x = GuildJoinRequestList{}
-	mi := &file_user_proto_msgTypes[32]
+	mi := &file_user_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2372,7 +2520,7 @@ func (x *GuildJoinRequestList) String() string {
 func (*GuildJoinRequestList) ProtoMessage() {}
 
 func (x *GuildJoinRequestList) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[32]
+	mi := &file_user_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2385,7 +2533,7 @@ func (x *GuildJoinRequestList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GuildJoinRequestList.ProtoReflect.Descriptor instead.
 func (*GuildJoinRequestList) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{32}
+	return file_user_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *GuildJoinRequestList) GetItems() []*GuildJoinRequest {
@@ -2405,7 +2553,7 @@ type GetGuildMemberRolesRequest struct {
 
 func (x *GetGuildMemberRolesRequest) Reset() {
 	*x = GetGuildMemberRolesRequest{}
-	mi := &file_user_proto_msgTypes[33]
+	mi := &file_user_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2417,7 +2565,7 @@ func (x *GetGuildMemberRolesRequest) String() string {
 func (*GetGuildMemberRolesRequest) ProtoMessage() {}
 
 func (x *GetGuildMemberRolesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[33]
+	mi := &file_user_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2430,7 +2578,7 @@ func (x *GetGuildMemberRolesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGuildMemberRolesRequest.ProtoReflect.Descriptor instead.
 func (*GetGuildMemberRolesRequest) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{33}
+	return file_user_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *GetGuildMemberRolesRequest) GetGuildId() string {
@@ -2456,7 +2604,7 @@ type GuildMemberRoleList struct {
 
 func (x *GuildMemberRoleList) Reset() {
 	*x = GuildMemberRoleList{}
-	mi := &file_user_proto_msgTypes[34]
+	mi := &file_user_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2468,7 +2616,7 @@ func (x *GuildMemberRoleList) String() string {
 func (*GuildMemberRoleList) ProtoMessage() {}
 
 func (x *GuildMemberRoleList) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[34]
+	mi := &file_user_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2481,7 +2629,7 @@ func (x *GuildMemberRoleList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GuildMemberRoleList.ProtoReflect.Descriptor instead.
 func (*GuildMemberRoleList) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{34}
+	return file_user_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *GuildMemberRoleList) GetRoles() []string {
@@ -2500,7 +2648,7 @@ type GetMyGuildRequest struct {
 
 func (x *GetMyGuildRequest) Reset() {
 	*x = GetMyGuildRequest{}
-	mi := &file_user_proto_msgTypes[35]
+	mi := &file_user_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2512,7 +2660,7 @@ func (x *GetMyGuildRequest) String() string {
 func (*GetMyGuildRequest) ProtoMessage() {}
 
 func (x *GetMyGuildRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[35]
+	mi := &file_user_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2525,7 +2673,7 @@ func (x *GetMyGuildRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMyGuildRequest.ProtoReflect.Descriptor instead.
 func (*GetMyGuildRequest) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{35}
+	return file_user_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *GetMyGuildRequest) GetAuthUserId() string {
@@ -2545,7 +2693,7 @@ type GetMyJoinRequestsRequest struct {
 
 func (x *GetMyJoinRequestsRequest) Reset() {
 	*x = GetMyJoinRequestsRequest{}
-	mi := &file_user_proto_msgTypes[36]
+	mi := &file_user_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2557,7 +2705,7 @@ func (x *GetMyJoinRequestsRequest) String() string {
 func (*GetMyJoinRequestsRequest) ProtoMessage() {}
 
 func (x *GetMyJoinRequestsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_user_proto_msgTypes[36]
+	mi := &file_user_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2570,7 +2718,7 @@ func (x *GetMyJoinRequestsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMyJoinRequestsRequest.ProtoReflect.Descriptor instead.
 func (*GetMyJoinRequestsRequest) Descriptor() ([]byte, []int) {
-	return file_user_proto_rawDescGZIP(), []int{36}
+	return file_user_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *GetMyJoinRequestsRequest) GetAuthUserId() string {
@@ -2737,7 +2885,15 @@ const file_user_proto_rawDesc = "" +
 	"\acontext\x18\x03 \x01(\tR\acontext\"b\n" +
 	" RevokeAchievementFromUserRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12%\n" +
-	"\x0eachievement_id\x18\x02 \x01(\tR\rachievementId\"J\n" +
+	"\x0eachievement_id\x18\x02 \x01(\tR\rachievementId\"f\n" +
+	"\x18GrantAchievementsRequest\x12J\n" +
+	"\x11user_achievements\x18\x01 \x03(\v2\x1d.user.v1.UserAchievementGrantR\x10userAchievements\"X\n" +
+	"\x14UserAchievementGrant\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12'\n" +
+	"\x0fachievement_key\x18\x02 \x01(\tR\x0eachievementKey\"X\n" +
+	"\x19GrantAchievementsResponse\x12#\n" +
+	"\rgranted_count\x18\x01 \x01(\x05R\fgrantedCount\x12\x16\n" +
+	"\x06errors\x18\x02 \x03(\tR\x06errors\"J\n" +
 	"&GetUserAchievementsByAuthUserIdRequest\x12 \n" +
 	"\fauth_user_id\x18\x01 \x01(\tR\n" +
 	"authUserId\"\x95\x02\n" +
@@ -2826,14 +2982,15 @@ const file_user_proto_rawDesc = "" +
 	"LogNewUser\x12\x1a.user.v1.LogNewUserRequest\x1a\x16.google.protobuf.Empty\x12F\n" +
 	"\x06GetAll\x12\".user.v1.GetAllUserProfilesRequest\x1a\x18.user.v1.UserProfileList2a\n" +
 	"\x12UserContextService\x12K\n" +
-	"\vGetByAuthId\x12&.user.v1.GetUserContextByAuthIdRequest\x1a\x14.user.v1.UserContext2\xa2\x04\n" +
+	"\vGetByAuthId\x12&.user.v1.GetUserContextByAuthIdRequest\x1a\x14.user.v1.UserContext2\xfe\x04\n" +
 	"\x13AchievementsService\x12:\n" +
 	"\x06GetAll\x12\x16.user.v1.GetAllRequest\x1a\x18.user.v1.AchievementList\x12A\n" +
 	"\x06Create\x12!.user.v1.CreateAchievementRequest\x1a\x14.user.v1.Achievement\x12A\n" +
 	"\x06Update\x12!.user.v1.UpdateAchievementRequest\x1a\x14.user.v1.Achievement\x12C\n" +
 	"\x06Delete\x12!.user.v1.DeleteAchievementRequest\x1a\x16.google.protobuf.Empty\x12M\n" +
 	"\vAwardToUser\x12&.user.v1.AwardAchievementToUserRequest\x1a\x16.google.protobuf.Empty\x12S\n" +
-	"\x0eRevokeFromUser\x12).user.v1.RevokeAchievementFromUserRequest\x1a\x16.google.protobuf.Empty\x12`\n" +
+	"\x0eRevokeFromUser\x12).user.v1.RevokeAchievementFromUserRequest\x1a\x16.google.protobuf.Empty\x12Z\n" +
+	"\x11GrantAchievements\x12!.user.v1.GrantAchievementsRequest\x1a\".user.v1.GrantAchievementsResponse\x12`\n" +
 	"\x0fGetByAuthUserId\x12/.user.v1.GetUserAchievementsByAuthUserIdRequest\x1a\x1c.user.v1.UserAchievementList2\xa2\x04\n" +
 	"\rGuildsService\x12<\n" +
 	"\fGetGuildById\x12\x1c.user.v1.GetGuildByIdRequest\x1a\x0e.user.v1.Guild\x12@\n" +
@@ -2857,7 +3014,7 @@ func file_user_proto_rawDescGZIP() []byte {
 	return file_user_proto_rawDescData
 }
 
-var file_user_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
+var file_user_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
 var file_user_proto_goTypes = []any{
 	(*GetUserProfileByAuthIdRequest)(nil),          // 0: user.v1.GetUserProfileByAuthIdRequest
 	(*UserProfile)(nil),                            // 1: user.v1.UserProfile
@@ -2879,90 +3036,96 @@ var file_user_proto_goTypes = []any{
 	(*DeleteAchievementRequest)(nil),               // 17: user.v1.DeleteAchievementRequest
 	(*AwardAchievementToUserRequest)(nil),          // 18: user.v1.AwardAchievementToUserRequest
 	(*RevokeAchievementFromUserRequest)(nil),       // 19: user.v1.RevokeAchievementFromUserRequest
-	(*GetUserAchievementsByAuthUserIdRequest)(nil), // 20: user.v1.GetUserAchievementsByAuthUserIdRequest
-	(*UserAchievement)(nil),                        // 21: user.v1.UserAchievement
-	(*UserAchievementList)(nil),                    // 22: user.v1.UserAchievementList
-	(*GetGuildByIdRequest)(nil),                    // 23: user.v1.GetGuildByIdRequest
-	(*Guild)(nil),                                  // 24: user.v1.Guild
-	(*GetAllGuildsRequest)(nil),                    // 25: user.v1.GetAllGuildsRequest
-	(*GuildList)(nil),                              // 26: user.v1.GuildList
-	(*GetGuildInvitationsRequest)(nil),             // 27: user.v1.GetGuildInvitationsRequest
-	(*GuildInvitation)(nil),                        // 28: user.v1.GuildInvitation
-	(*GuildInvitationList)(nil),                    // 29: user.v1.GuildInvitationList
-	(*GetGuildJoinRequestsRequest)(nil),            // 30: user.v1.GetGuildJoinRequestsRequest
-	(*GuildJoinRequest)(nil),                       // 31: user.v1.GuildJoinRequest
-	(*GuildJoinRequestList)(nil),                   // 32: user.v1.GuildJoinRequestList
-	(*GetGuildMemberRolesRequest)(nil),             // 33: user.v1.GetGuildMemberRolesRequest
-	(*GuildMemberRoleList)(nil),                    // 34: user.v1.GuildMemberRoleList
-	(*GetMyGuildRequest)(nil),                      // 35: user.v1.GetMyGuildRequest
-	(*GetMyJoinRequestsRequest)(nil),               // 36: user.v1.GetMyJoinRequestsRequest
-	(*timestamppb.Timestamp)(nil),                  // 37: google.protobuf.Timestamp
-	(*emptypb.Empty)(nil),                          // 38: google.protobuf.Empty
+	(*GrantAchievementsRequest)(nil),               // 20: user.v1.GrantAchievementsRequest
+	(*UserAchievementGrant)(nil),                   // 21: user.v1.UserAchievementGrant
+	(*GrantAchievementsResponse)(nil),              // 22: user.v1.GrantAchievementsResponse
+	(*GetUserAchievementsByAuthUserIdRequest)(nil), // 23: user.v1.GetUserAchievementsByAuthUserIdRequest
+	(*UserAchievement)(nil),                        // 24: user.v1.UserAchievement
+	(*UserAchievementList)(nil),                    // 25: user.v1.UserAchievementList
+	(*GetGuildByIdRequest)(nil),                    // 26: user.v1.GetGuildByIdRequest
+	(*Guild)(nil),                                  // 27: user.v1.Guild
+	(*GetAllGuildsRequest)(nil),                    // 28: user.v1.GetAllGuildsRequest
+	(*GuildList)(nil),                              // 29: user.v1.GuildList
+	(*GetGuildInvitationsRequest)(nil),             // 30: user.v1.GetGuildInvitationsRequest
+	(*GuildInvitation)(nil),                        // 31: user.v1.GuildInvitation
+	(*GuildInvitationList)(nil),                    // 32: user.v1.GuildInvitationList
+	(*GetGuildJoinRequestsRequest)(nil),            // 33: user.v1.GetGuildJoinRequestsRequest
+	(*GuildJoinRequest)(nil),                       // 34: user.v1.GuildJoinRequest
+	(*GuildJoinRequestList)(nil),                   // 35: user.v1.GuildJoinRequestList
+	(*GetGuildMemberRolesRequest)(nil),             // 36: user.v1.GetGuildMemberRolesRequest
+	(*GuildMemberRoleList)(nil),                    // 37: user.v1.GuildMemberRoleList
+	(*GetMyGuildRequest)(nil),                      // 38: user.v1.GetMyGuildRequest
+	(*GetMyJoinRequestsRequest)(nil),               // 39: user.v1.GetMyJoinRequestsRequest
+	(*timestamppb.Timestamp)(nil),                  // 40: google.protobuf.Timestamp
+	(*emptypb.Empty)(nil),                          // 41: google.protobuf.Empty
 }
 var file_user_proto_depIdxs = []int32{
-	37, // 0: user.v1.UserProfile.created_at:type_name -> google.protobuf.Timestamp
+	40, // 0: user.v1.UserProfile.created_at:type_name -> google.protobuf.Timestamp
 	1,  // 1: user.v1.UserProfileList.items:type_name -> user.v1.UserProfile
-	37, // 2: user.v1.UserSkill.last_updated_at:type_name -> google.protobuf.Timestamp
+	40, // 2: user.v1.UserSkill.last_updated_at:type_name -> google.protobuf.Timestamp
 	9,  // 3: user.v1.SkillSummary.top_skills:type_name -> user.v1.UserSkill
 	7,  // 4: user.v1.UserContext.class:type_name -> user.v1.ClassSummary
 	8,  // 5: user.v1.UserContext.enrollment:type_name -> user.v1.CurriculumEnrollment
 	10, // 6: user.v1.UserContext.skills:type_name -> user.v1.SkillSummary
 	13, // 7: user.v1.AchievementList.achievements:type_name -> user.v1.Achievement
-	37, // 8: user.v1.UserAchievement.earned_at:type_name -> google.protobuf.Timestamp
-	21, // 9: user.v1.UserAchievementList.achievements:type_name -> user.v1.UserAchievement
-	37, // 10: user.v1.Guild.created_at:type_name -> google.protobuf.Timestamp
-	24, // 11: user.v1.GuildList.items:type_name -> user.v1.Guild
-	37, // 12: user.v1.GuildInvitation.expires_at:type_name -> google.protobuf.Timestamp
-	37, // 13: user.v1.GuildInvitation.created_at:type_name -> google.protobuf.Timestamp
-	37, // 14: user.v1.GuildInvitation.responded_at:type_name -> google.protobuf.Timestamp
-	28, // 15: user.v1.GuildInvitationList.items:type_name -> user.v1.GuildInvitation
-	37, // 16: user.v1.GuildJoinRequest.created_at:type_name -> google.protobuf.Timestamp
-	37, // 17: user.v1.GuildJoinRequest.responded_at:type_name -> google.protobuf.Timestamp
-	37, // 18: user.v1.GuildJoinRequest.expires_at:type_name -> google.protobuf.Timestamp
-	31, // 19: user.v1.GuildJoinRequestList.items:type_name -> user.v1.GuildJoinRequest
-	0,  // 20: user.v1.UserProfilesService.GetByAuthId:input_type -> user.v1.GetUserProfileByAuthIdRequest
-	2,  // 21: user.v1.UserProfilesService.UpdateMyProfile:input_type -> user.v1.UpdateMyProfileRequest
-	3,  // 22: user.v1.UserProfilesService.LogNewUser:input_type -> user.v1.LogNewUserRequest
-	4,  // 23: user.v1.UserProfilesService.GetAll:input_type -> user.v1.GetAllUserProfilesRequest
-	6,  // 24: user.v1.UserContextService.GetByAuthId:input_type -> user.v1.GetUserContextByAuthIdRequest
-	12, // 25: user.v1.AchievementsService.GetAll:input_type -> user.v1.GetAllRequest
-	15, // 26: user.v1.AchievementsService.Create:input_type -> user.v1.CreateAchievementRequest
-	16, // 27: user.v1.AchievementsService.Update:input_type -> user.v1.UpdateAchievementRequest
-	17, // 28: user.v1.AchievementsService.Delete:input_type -> user.v1.DeleteAchievementRequest
-	18, // 29: user.v1.AchievementsService.AwardToUser:input_type -> user.v1.AwardAchievementToUserRequest
-	19, // 30: user.v1.AchievementsService.RevokeFromUser:input_type -> user.v1.RevokeAchievementFromUserRequest
-	20, // 31: user.v1.AchievementsService.GetByAuthUserId:input_type -> user.v1.GetUserAchievementsByAuthUserIdRequest
-	23, // 32: user.v1.GuildsService.GetGuildById:input_type -> user.v1.GetGuildByIdRequest
-	25, // 33: user.v1.GuildsService.GetAllGuilds:input_type -> user.v1.GetAllGuildsRequest
-	27, // 34: user.v1.GuildsService.GetInvitations:input_type -> user.v1.GetGuildInvitationsRequest
-	30, // 35: user.v1.GuildsService.GetJoinRequests:input_type -> user.v1.GetGuildJoinRequestsRequest
-	33, // 36: user.v1.GuildsService.GetMemberRoles:input_type -> user.v1.GetGuildMemberRolesRequest
-	35, // 37: user.v1.GuildsService.GetMyGuild:input_type -> user.v1.GetMyGuildRequest
-	36, // 38: user.v1.GuildsService.GetMyJoinRequests:input_type -> user.v1.GetMyJoinRequestsRequest
-	1,  // 39: user.v1.UserProfilesService.GetByAuthId:output_type -> user.v1.UserProfile
-	1,  // 40: user.v1.UserProfilesService.UpdateMyProfile:output_type -> user.v1.UserProfile
-	38, // 41: user.v1.UserProfilesService.LogNewUser:output_type -> google.protobuf.Empty
-	5,  // 42: user.v1.UserProfilesService.GetAll:output_type -> user.v1.UserProfileList
-	11, // 43: user.v1.UserContextService.GetByAuthId:output_type -> user.v1.UserContext
-	14, // 44: user.v1.AchievementsService.GetAll:output_type -> user.v1.AchievementList
-	13, // 45: user.v1.AchievementsService.Create:output_type -> user.v1.Achievement
-	13, // 46: user.v1.AchievementsService.Update:output_type -> user.v1.Achievement
-	38, // 47: user.v1.AchievementsService.Delete:output_type -> google.protobuf.Empty
-	38, // 48: user.v1.AchievementsService.AwardToUser:output_type -> google.protobuf.Empty
-	38, // 49: user.v1.AchievementsService.RevokeFromUser:output_type -> google.protobuf.Empty
-	22, // 50: user.v1.AchievementsService.GetByAuthUserId:output_type -> user.v1.UserAchievementList
-	24, // 51: user.v1.GuildsService.GetGuildById:output_type -> user.v1.Guild
-	26, // 52: user.v1.GuildsService.GetAllGuilds:output_type -> user.v1.GuildList
-	29, // 53: user.v1.GuildsService.GetInvitations:output_type -> user.v1.GuildInvitationList
-	32, // 54: user.v1.GuildsService.GetJoinRequests:output_type -> user.v1.GuildJoinRequestList
-	34, // 55: user.v1.GuildsService.GetMemberRoles:output_type -> user.v1.GuildMemberRoleList
-	24, // 56: user.v1.GuildsService.GetMyGuild:output_type -> user.v1.Guild
-	32, // 57: user.v1.GuildsService.GetMyJoinRequests:output_type -> user.v1.GuildJoinRequestList
-	39, // [39:58] is the sub-list for method output_type
-	20, // [20:39] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	21, // 8: user.v1.GrantAchievementsRequest.user_achievements:type_name -> user.v1.UserAchievementGrant
+	40, // 9: user.v1.UserAchievement.earned_at:type_name -> google.protobuf.Timestamp
+	24, // 10: user.v1.UserAchievementList.achievements:type_name -> user.v1.UserAchievement
+	40, // 11: user.v1.Guild.created_at:type_name -> google.protobuf.Timestamp
+	27, // 12: user.v1.GuildList.items:type_name -> user.v1.Guild
+	40, // 13: user.v1.GuildInvitation.expires_at:type_name -> google.protobuf.Timestamp
+	40, // 14: user.v1.GuildInvitation.created_at:type_name -> google.protobuf.Timestamp
+	40, // 15: user.v1.GuildInvitation.responded_at:type_name -> google.protobuf.Timestamp
+	31, // 16: user.v1.GuildInvitationList.items:type_name -> user.v1.GuildInvitation
+	40, // 17: user.v1.GuildJoinRequest.created_at:type_name -> google.protobuf.Timestamp
+	40, // 18: user.v1.GuildJoinRequest.responded_at:type_name -> google.protobuf.Timestamp
+	40, // 19: user.v1.GuildJoinRequest.expires_at:type_name -> google.protobuf.Timestamp
+	34, // 20: user.v1.GuildJoinRequestList.items:type_name -> user.v1.GuildJoinRequest
+	0,  // 21: user.v1.UserProfilesService.GetByAuthId:input_type -> user.v1.GetUserProfileByAuthIdRequest
+	2,  // 22: user.v1.UserProfilesService.UpdateMyProfile:input_type -> user.v1.UpdateMyProfileRequest
+	3,  // 23: user.v1.UserProfilesService.LogNewUser:input_type -> user.v1.LogNewUserRequest
+	4,  // 24: user.v1.UserProfilesService.GetAll:input_type -> user.v1.GetAllUserProfilesRequest
+	6,  // 25: user.v1.UserContextService.GetByAuthId:input_type -> user.v1.GetUserContextByAuthIdRequest
+	12, // 26: user.v1.AchievementsService.GetAll:input_type -> user.v1.GetAllRequest
+	15, // 27: user.v1.AchievementsService.Create:input_type -> user.v1.CreateAchievementRequest
+	16, // 28: user.v1.AchievementsService.Update:input_type -> user.v1.UpdateAchievementRequest
+	17, // 29: user.v1.AchievementsService.Delete:input_type -> user.v1.DeleteAchievementRequest
+	18, // 30: user.v1.AchievementsService.AwardToUser:input_type -> user.v1.AwardAchievementToUserRequest
+	19, // 31: user.v1.AchievementsService.RevokeFromUser:input_type -> user.v1.RevokeAchievementFromUserRequest
+	20, // 32: user.v1.AchievementsService.GrantAchievements:input_type -> user.v1.GrantAchievementsRequest
+	23, // 33: user.v1.AchievementsService.GetByAuthUserId:input_type -> user.v1.GetUserAchievementsByAuthUserIdRequest
+	26, // 34: user.v1.GuildsService.GetGuildById:input_type -> user.v1.GetGuildByIdRequest
+	28, // 35: user.v1.GuildsService.GetAllGuilds:input_type -> user.v1.GetAllGuildsRequest
+	30, // 36: user.v1.GuildsService.GetInvitations:input_type -> user.v1.GetGuildInvitationsRequest
+	33, // 37: user.v1.GuildsService.GetJoinRequests:input_type -> user.v1.GetGuildJoinRequestsRequest
+	36, // 38: user.v1.GuildsService.GetMemberRoles:input_type -> user.v1.GetGuildMemberRolesRequest
+	38, // 39: user.v1.GuildsService.GetMyGuild:input_type -> user.v1.GetMyGuildRequest
+	39, // 40: user.v1.GuildsService.GetMyJoinRequests:input_type -> user.v1.GetMyJoinRequestsRequest
+	1,  // 41: user.v1.UserProfilesService.GetByAuthId:output_type -> user.v1.UserProfile
+	1,  // 42: user.v1.UserProfilesService.UpdateMyProfile:output_type -> user.v1.UserProfile
+	41, // 43: user.v1.UserProfilesService.LogNewUser:output_type -> google.protobuf.Empty
+	5,  // 44: user.v1.UserProfilesService.GetAll:output_type -> user.v1.UserProfileList
+	11, // 45: user.v1.UserContextService.GetByAuthId:output_type -> user.v1.UserContext
+	14, // 46: user.v1.AchievementsService.GetAll:output_type -> user.v1.AchievementList
+	13, // 47: user.v1.AchievementsService.Create:output_type -> user.v1.Achievement
+	13, // 48: user.v1.AchievementsService.Update:output_type -> user.v1.Achievement
+	41, // 49: user.v1.AchievementsService.Delete:output_type -> google.protobuf.Empty
+	41, // 50: user.v1.AchievementsService.AwardToUser:output_type -> google.protobuf.Empty
+	41, // 51: user.v1.AchievementsService.RevokeFromUser:output_type -> google.protobuf.Empty
+	22, // 52: user.v1.AchievementsService.GrantAchievements:output_type -> user.v1.GrantAchievementsResponse
+	25, // 53: user.v1.AchievementsService.GetByAuthUserId:output_type -> user.v1.UserAchievementList
+	27, // 54: user.v1.GuildsService.GetGuildById:output_type -> user.v1.Guild
+	29, // 55: user.v1.GuildsService.GetAllGuilds:output_type -> user.v1.GuildList
+	32, // 56: user.v1.GuildsService.GetInvitations:output_type -> user.v1.GuildInvitationList
+	35, // 57: user.v1.GuildsService.GetJoinRequests:output_type -> user.v1.GuildJoinRequestList
+	37, // 58: user.v1.GuildsService.GetMemberRoles:output_type -> user.v1.GuildMemberRoleList
+	27, // 59: user.v1.GuildsService.GetMyGuild:output_type -> user.v1.Guild
+	35, // 60: user.v1.GuildsService.GetMyJoinRequests:output_type -> user.v1.GuildJoinRequestList
+	41, // [41:61] is the sub-list for method output_type
+	21, // [21:41] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_user_proto_init() }
@@ -2976,7 +3139,7 @@ func file_user_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_user_proto_rawDesc), len(file_user_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   37,
+			NumMessages:   40,
 			NumExtensions: 0,
 			NumServices:   4,
 		},

@@ -30,6 +30,19 @@ OFFSET $2;
 -- name: CountEvents :one
 SELECT COUNT(*) FROM events;
 
+-- name: GetEventsByStatus :many
+-- Filter events by status with pagination
+SELECT * FROM events
+WHERE status = $1
+ORDER BY started_date ASC
+LIMIT $2
+OFFSET $3;
+
+-- name: CountEventsByStatus :one
+-- Count events filtered by status
+SELECT COUNT(*) FROM events
+WHERE status = $1;
+
 -- name: GetEventsByType :many
 SELECT * FROM events
 WHERE type = $1
@@ -37,8 +50,17 @@ ORDER BY started_date ASC;
 
 -- name: GetActiveEvents :many
 SELECT * FROM events
-WHERE started_date <= NOW() AND end_date >= NOW()
+WHERE status = 'active'
 ORDER BY started_date ASC;
+
+-- name: GetExpiredActiveEvents :many
+-- Find events that are stuck in 'active' status but have already expired
+-- This is used by the background job to detect and complete orphaned events
+-- whose expiry timers were lost due to crashes or failures
+SELECT * FROM events
+WHERE status = 'active'
+  AND end_date < NOW() AT TIME ZONE 'utc'
+ORDER BY end_date ASC;
 
 -- name: UpdateEvent :one
 UPDATE events
@@ -310,8 +332,8 @@ DELETE FROM rooms WHERE id = $1;
 
 -- Room Players
 -- name: CreateRoomPlayer :one
-INSERT INTO room_players (room_id, user_id, username, score, place, state)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO room_players (room_id, user_id, username, guild_id, score, place, state)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
 -- name: GetRoomPlayer :one
@@ -347,7 +369,7 @@ RETURNING *;
 
 -- name: DisconnectRoomPlayer :one
 UPDATE room_players
-SET disconnected_at = NOW()
+SET disconnected_at = NOW() AT TIME ZONE 'utc'
 WHERE room_id = $1 AND user_id = $2
 RETURNING *;
 
@@ -429,8 +451,8 @@ WHERE event_id = $1 AND guild_id = $2;
 
 -- Submissions
 -- name: CreateSubmission :one
-INSERT INTO submissions (user_id, code_problem_id, language_id, room_id, code_submitted, status, execution_time_ms, submitted_guild_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO submissions (user_id, code_problem_id, language_id, room_id, code_submitted, status, execution_time_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
 -- name: CheckIfProblemAlreadySolved :one
@@ -482,7 +504,8 @@ SELECT s.*, cp.title as problem_title, l.name as language_name
 FROM submissions s
 JOIN code_problems cp ON s.code_problem_id = cp.id
 JOIN languages l ON s.language_id = l.id
-WHERE s.submitted_guild_id = $1
+JOIN room_players rp ON s.user_id = rp.user_id AND s.room_id = rp.room_id
+WHERE rp.guild_id = $1
 ORDER BY s.submitted_at DESC;
 
 -- name: GetSubmissionsByStatus :many
@@ -713,7 +736,8 @@ UPDATE event_requests
 SET
   status = $2,
   processed_by_admin_id = $3,
-  processed_at = NOW(),
+  processed_at = NOW() AT TIME ZONE 'utc'
+,
   rejection_reason = $4,
   approved_event_id = $5
 WHERE id = $1
@@ -729,7 +753,7 @@ RETURNING *;
 -- (assignment_date has passed and status is still 'pending')
 SELECT * FROM events
 WHERE status = 'pending'
-  AND assignment_date <= NOW()
+  AND assignment_date <= NOW() AT TIME ZONE 'utc'
 ORDER BY assignment_date ASC;
 
 -- name: UpdateEventStatusToActive :one
@@ -770,3 +794,127 @@ SET state = CASE
 END
 FROM locked_players lp
 WHERE rp.room_id = lp.room_id AND rp.user_id = lp.user_id;
+
+-- name: CaptureFinalRoomLeaderboards :exec
+-- Capture final leaderboard snapshot for all rooms in an event
+-- This creates a permanent historical record of final rankings and scores
+-- Called when event completes to preserve winner information
+INSERT INTO leaderboard_entries (user_id, username, event_id, rank, score, snapshot_date)
+SELECT
+  rp.user_id,
+  rp.username,
+  $1::uuid as event_id,
+  rp.place as rank,
+  rp.score,
+  NOW() AT TIME ZONE 'utc' as snapshot_date
+FROM room_players rp
+INNER JOIN rooms r ON rp.room_id = r.id
+WHERE r.event_id = $1
+  AND rp.state IN ('completed'::room_player_state, 'present'::room_player_state)
+ORDER BY rp.score DESC, rp.joined_at ASC;
+
+-- name: CaptureFinalGuildLeaderboard :exec
+-- Capture final guild leaderboard snapshot for an event
+-- Calculates total scores by summing all players from each guild
+-- Creates permanent record of which guild won
+WITH guild_scores AS (
+  SELECT
+    rp.guild_id,
+    SUM(rp.score) as total_score,
+    COUNT(DISTINCT rp.user_id) as player_count
+  FROM room_players rp
+  INNER JOIN rooms r ON rp.room_id = r.id
+  WHERE r.event_id = $1
+    AND rp.state IN ('completed'::room_player_state, 'present'::room_player_state)
+  GROUP BY rp.guild_id
+),
+ranked_guilds AS (
+  SELECT
+    guild_id,
+    total_score,
+    RANK() OVER (ORDER BY total_score DESC) as rank
+  FROM guild_scores
+)
+INSERT INTO guild_leaderboard_entries (guild_id, guild_name, event_id, rank, total_score, snapshot_date)
+SELECT
+  rg.guild_id,
+  'Guild-' || rg.guild_id::text as guild_name,  -- TODO: Get actual guild name from guild service
+  $1::uuid as event_id,
+  rg.rank::integer,
+  rg.total_score::integer,
+  NOW() AT TIME ZONE 'utc' as snapshot_date
+FROM ranked_guilds rg;
+
+-- name: GetTop3PlayersByEvent :many
+-- Get top 3 players across all rooms in an event
+-- P2-1: Used to populate EventExpired message with winners
+SELECT
+  rp.user_id,
+  rp.username,
+  rp.score,
+  rp.place as rank,
+  rp.room_id
+FROM room_players rp
+INNER JOIN rooms r ON rp.room_id = r.id
+WHERE r.event_id = $1
+  AND rp.state IN ('completed'::room_player_state, 'present'::room_player_state)
+ORDER BY rp.score DESC, rp.joined_at ASC
+LIMIT 3;
+
+-- name: GetTop3GuildsByEvent :many
+-- Get top 3 guilds by total score for an event
+-- P2-1: Used to populate EventExpired message with winning guilds
+WITH guild_scores AS (
+  SELECT
+    rp.guild_id,
+    SUM(rp.score) as total_score
+  FROM room_players rp
+  INNER JOIN rooms r ON rp.room_id = r.id
+  WHERE r.event_id = $1
+    AND rp.state IN ('completed'::room_player_state, 'present'::room_player_state)
+  GROUP BY rp.guild_id
+)
+SELECT
+  guild_id,
+  'Guild-' || guild_id::text as guild_name,
+  total_score,
+  RANK() OVER (ORDER BY total_score DESC) as rank
+FROM guild_scores
+ORDER BY total_score DESC
+LIMIT 3;
+
+-- name: GetEventStatistics :one
+-- Get aggregate statistics for an event
+-- P2-1: Used to populate EventExpired message with event stats
+WITH event_rooms AS (
+  SELECT id FROM rooms WHERE event_id = $1
+),
+player_stats AS (
+  SELECT
+    COUNT(DISTINCT rp.user_id) as total_participants,
+    COALESCE(AVG(rp.score), 0) as average_score,
+    COALESCE(MAX(rp.score), 0) as highest_score
+  FROM room_players rp
+  WHERE rp.room_id IN (SELECT id FROM event_rooms)
+    AND rp.state IN ('completed'::room_player_state, 'present'::room_player_state)
+),
+submission_stats AS (
+  SELECT
+    COUNT(*) as total_submissions,
+    COUNT(CASE WHEN s.status = 'accepted' THEN 1 END) as accepted_submissions
+  FROM submissions s
+  WHERE s.room_id IN (SELECT id FROM event_rooms)
+)
+SELECT
+  ps.total_participants::integer,
+  ss.total_submissions::integer,
+  ss.accepted_submissions::integer,
+  CASE
+    WHEN ss.total_submissions > 0 THEN
+      ROUND((ss.accepted_submissions::numeric / ss.total_submissions::numeric) * 100, 2)
+    ELSE 0
+  END as acceptance_rate,
+  ROUND(ps.average_score::numeric, 2) as average_score,
+  ps.highest_score::integer,
+  (SELECT COUNT(*) FROM event_rooms)::integer as total_rooms
+FROM player_stats ps, submission_stats ss;

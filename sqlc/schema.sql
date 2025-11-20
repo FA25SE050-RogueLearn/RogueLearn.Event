@@ -135,6 +135,7 @@ CREATE TABLE public.leaderboard_entries (
 CREATE TABLE public.room_players (
   room_id uuid NOT NULL,
   user_id uuid NOT NULL,
+  guild_id uuid NOT NULL,
   username text NOT NULL DEFAULT ''::text,
   score integer NOT NULL DEFAULT 0,
   place integer,
@@ -163,7 +164,6 @@ CREATE TABLE public.submissions (
   status submission_status NOT NULL,
   execution_time_ms integer,
   submitted_at timestamp with time zone NOT NULL DEFAULT (now() AT TIME ZONE 'utc'::text),
-  submitted_guild_id uuid,
   CONSTRAINT submissions_pkey PRIMARY KEY (id),
   CONSTRAINT submissions_code_problem_id_fkey FOREIGN KEY (code_problem_id) REFERENCES public.code_problems(id),
   CONSTRAINT submissions_language_id_fkey FOREIGN KEY (language_id) REFERENCES public.languages(id),

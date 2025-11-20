@@ -138,3 +138,7 @@ func (c *Client) GetMyGuild(ctx context.Context, req *pb.GetMyGuildRequest) (*pb
 func (c *Client) GetMyJoinRequests(ctx context.Context, req *pb.GetMyJoinRequestsRequest) (*pb.GuildJoinRequestList, error) {
 	return c.guildsClient.GetMyJoinRequests(ctx, req)
 }
+
+func (c *Client) GrantAchievements(ctx context.Context, req *pb.GrantAchievementsRequest) (*pb.GrantAchievementsResponse, error) {
+	return c.achievementsClient.GrantAchievements(ctx, req)
+}

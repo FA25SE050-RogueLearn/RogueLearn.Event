@@ -230,7 +230,7 @@ func (hr *HandlerRepo) ProcessEventAssignment(ctx context.Context, eventID uuid.
 
 	// Schedule event expiry timer
 	// When timer fires, DB is updated and EventExpired is published to RabbitMQ
-	endDate := event.EndDate.Time
+	endDate := event.EndDate.Time.UTC()
 	hr.eventHub.ScheduleEventExpiry(eventID, endDate)
 
 	hr.logger.Info("Event expiry timer scheduled",

@@ -345,6 +345,7 @@ type Room struct {
 type RoomPlayer struct {
 	RoomID         pgtype.UUID
 	UserID         pgtype.UUID
+	GuildID        pgtype.UUID
 	Username       string
 	Score          int32
 	Place          pgtype.Int4
@@ -354,16 +355,15 @@ type RoomPlayer struct {
 }
 
 type Submission struct {
-	ID               pgtype.UUID
-	UserID           pgtype.UUID
-	CodeProblemID    pgtype.UUID
-	LanguageID       pgtype.UUID
-	RoomID           pgtype.UUID
-	CodeSubmitted    string
-	Status           SubmissionStatus
-	ExecutionTimeMs  pgtype.Int4
-	SubmittedAt      pgtype.Timestamptz
-	SubmittedGuildID pgtype.UUID
+	ID              pgtype.UUID
+	UserID          pgtype.UUID
+	CodeProblemID   pgtype.UUID
+	LanguageID      pgtype.UUID
+	RoomID          pgtype.UUID
+	CodeSubmitted   string
+	Status          SubmissionStatus
+	ExecutionTimeMs pgtype.Int4
+	SubmittedAt     pgtype.Timestamptz
 }
 
 type Tag struct {

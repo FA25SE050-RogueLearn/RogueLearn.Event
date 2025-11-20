@@ -21,25 +21,128 @@ func (hr *HandlerRepo) GetEventsHandler(w http.ResponseWriter, r *http.Request) 
 	// Parse pagination parameters from query string
 	pagination := parsePaginationParams(r)
 
-	// Get total count
-	totalCount, err := hr.queries.CountEvents(r.Context())
-	if err != nil {
-		hr.logger.Error("failed to count events", "err", err)
-		hr.serverError(w, r, err)
-		return
+	// Get status filter from query parameter
+	statusFilter := r.URL.Query().Get("status")
+
+	// Check if user is a Game Master (admin)
+	isGameMaster := HasRole(r.Context(), "Game Master")
+
+	// Authorization logic for status filtering
+	if statusFilter != "" {
+		// Validate status is a valid event_status value
+		validStatuses := map[string]bool{
+			"pending":   true,
+			"active":    true,
+			"completed": true,
+			"cancelled": true,
+		}
+
+		if !validStatuses[statusFilter] {
+			hr.badRequest(w, r, errors.New("invalid status value. Must be one of: pending, active, completed, cancelled"))
+			return
+		}
+
+		// Only Game Masters can filter by 'pending' or 'cancelled' status
+		restrictedStatuses := statusFilter == "pending" || statusFilter == "cancelled"
+		if restrictedStatuses && !isGameMaster {
+			hr.forbidden(w, r)
+			return
+		}
 	}
 
-	// Get paginated data
-	params := store.GetEventsParams{
-		Limit:  pagination.Limit,
-		Offset: pagination.Offset,
-	}
+	var events []store.Event
+	var totalCount int64
+	var err error
 
-	events, err := hr.queries.GetEvents(r.Context(), params)
-	if err != nil {
-		hr.logger.Error("failed to get events", "err", err)
-		hr.serverError(w, r, err)
-		return
+	if statusFilter != "" {
+		// Get count with status filter
+		totalCount, err = hr.queries.CountEventsByStatus(r.Context(), store.EventStatus(statusFilter))
+		if err != nil {
+			hr.logger.Error("failed to count events by status", "err", err, "status", statusFilter)
+			hr.serverError(w, r, err)
+			return
+		}
+
+		// Get filtered events
+		events, err = hr.queries.GetEventsByStatus(r.Context(), store.GetEventsByStatusParams{
+			Status: store.EventStatus(statusFilter),
+			Limit:  pagination.Limit,
+			Offset: pagination.Offset,
+		})
+		if err != nil {
+			hr.logger.Error("failed to get events by status", "err", err, "status", statusFilter)
+			hr.serverError(w, r, err)
+			return
+		}
+	} else {
+		// No status filter provided
+		// Normal users: only show 'active' and 'completed' events
+		// Game Masters: show all events
+		if !isGameMaster {
+			// For normal users without status filter, only return active and completed events
+			// We need to get them separately and combine
+			activeEvents, err := hr.queries.GetEventsByStatus(r.Context(), store.GetEventsByStatusParams{
+				Status: store.EventStatusActive,
+				Limit:  pagination.Limit,
+				Offset: pagination.Offset,
+			})
+			if err != nil {
+				hr.logger.Error("failed to get active events", "err", err)
+				hr.serverError(w, r, err)
+				return
+			}
+
+			completedEvents, err := hr.queries.GetEventsByStatus(r.Context(), store.GetEventsByStatusParams{
+				Status: store.EventStatusCompleted,
+				Limit:  pagination.Limit,
+				Offset: pagination.Offset,
+			})
+			if err != nil {
+				hr.logger.Error("failed to get completed events", "err", err)
+				hr.serverError(w, r, err)
+				return
+			}
+
+			// Combine results
+			events = append(activeEvents, completedEvents...)
+
+			// Get combined count
+			activeCount, err := hr.queries.CountEventsByStatus(r.Context(), store.EventStatusActive)
+			if err != nil {
+				hr.logger.Error("failed to count active events", "err", err)
+				hr.serverError(w, r, err)
+				return
+			}
+
+			completedCount, err := hr.queries.CountEventsByStatus(r.Context(), store.EventStatusCompleted)
+			if err != nil {
+				hr.logger.Error("failed to count completed events", "err", err)
+				hr.serverError(w, r, err)
+				return
+			}
+
+			totalCount = activeCount + completedCount
+		} else {
+			// Game Master: show all events
+			totalCount, err = hr.queries.CountEvents(r.Context())
+			if err != nil {
+				hr.logger.Error("failed to count events", "err", err)
+				hr.serverError(w, r, err)
+				return
+			}
+
+			params := store.GetEventsParams{
+				Limit:  pagination.Limit,
+				Offset: pagination.Offset,
+			}
+
+			events, err = hr.queries.GetEvents(r.Context(), params)
+			if err != nil {
+				hr.logger.Error("failed to get events", "err", err)
+				hr.serverError(w, r, err)
+				return
+			}
+		}
 	}
 
 	// Create pagination response

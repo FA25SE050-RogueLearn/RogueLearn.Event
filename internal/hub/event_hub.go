@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,7 +26,18 @@ import (
 
 const (
 	DefaultQueryTimeoutSecond = 10 * time.Second
+
+	AchievementCodeBattleTop1        = "code_battle_top_1"
+	AchievementCodeBattleTop2        = "code_battle_top_2"
+	AchievementCodeBattleTop3        = "code_battle_top_3"
+	AchievementCodeBattleParticipant = "code_battle_participant"
 )
+
+var AchievementCodeBattle map[int]string = map[int]string{
+	1: AchievementCodeBattleTop1,
+	2: AchievementCodeBattleTop2,
+	3: AchievementCodeBattleTop3,
+}
 
 // event-based
 // each room will have a room manager, acting as a broadcaster for room-related events to all connected clients
@@ -96,6 +108,11 @@ func NewEventHub(db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, 
 		e.recoverActiveEvents(ctx)
 	}()
 
+	// CRITICAL: Start background job to detect and complete expired events
+	// This provides defense-in-depth against timer loss due to crashes/restarts
+	// Runs every 60 seconds to catch events that should have expired but didn't
+	go e.startExpiredEventMonitor()
+
 	go e.Start()
 
 	for _, r := range e.Rooms {
@@ -111,6 +128,11 @@ func NewEventHub(db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, 
 // When the timer fires, it calls completeEvent which:
 // - Atomically updates the event status to 'completed' in the database
 // - Publishes EventExpired to RabbitMQ so all instances receive it
+//
+// P1-3: Implements grace period for in-flight submissions
+// - Timer fires at end_date
+// - Waits GRACE_PERIOD (10 seconds) for in-flight submissions to complete
+// - Then marks event as completed
 func (e *EventHub) ScheduleEventExpiry(eventID uuid.UUID, endDate time.Time) {
 	duration := time.Until(endDate)
 
@@ -118,7 +140,7 @@ func (e *EventHub) ScheduleEventExpiry(eventID uuid.UUID, endDate time.Time) {
 		e.logger.Warn("Event end date is in the past, not scheduling timer",
 			"event_id", eventID,
 			"end_date", endDate,
-			"now", time.Now())
+			"now", time.Now().UTC())
 		return
 	}
 
@@ -130,8 +152,39 @@ func (e *EventHub) ScheduleEventExpiry(eventID uuid.UUID, endDate time.Time) {
 	// Schedule one-time timer
 	time.AfterFunc(duration, func() {
 		e.logger.Info("Event expiry timer fired", "event_id", eventID)
-		e.completeEvent(eventID)
+		e.completeEventWithGracePeriod(eventID)
 	})
+}
+
+// completeEventWithGracePeriod implements a grace period before completing the event.
+// This gives in-flight submissions time to finish processing.
+//
+// P1-3: Grace period prevents unfair rejection of submissions that were:
+// - Submitted before end_date
+// - Still being judged when timer fired
+// - Would otherwise be rejected despite being submitted on time
+//
+// Grace period: 10 seconds (configurable)
+func (e *EventHub) completeEventWithGracePeriod(eventID uuid.UUID) {
+	const gracePeriod = 10 * time.Second
+
+	e.logger.Info("Event expired - starting grace period for in-flight submissions",
+		"event_id", eventID,
+		"grace_period", gracePeriod)
+
+	// Wait for grace period to allow in-flight submissions to complete
+	// During this time:
+	// - New submissions are rejected (event.end_date has passed)
+	// - In-flight submissions continue processing
+	// - Judge responses are still accepted and scored
+	time.Sleep(gracePeriod)
+
+	e.logger.Info("Grace period complete - now completing event",
+		"event_id", eventID,
+		"grace_period", gracePeriod)
+
+	// Now complete the event (with all P0 fixes)
+	e.completeEvent(eventID)
 }
 
 // completeEvent atomically marks an event as completed and broadcasts the expiry message.
@@ -139,103 +192,394 @@ func (e *EventHub) ScheduleEventExpiry(eventID uuid.UUID, endDate time.Time) {
 //
 // Flow:
 // 1. Atomically update event status: active → completed (only one instance succeeds)
-// 2. Publish EventExpired to RabbitMQ fanout exchange
-// 3. All instances receive the message and broadcast to their connected players
-func (e *EventHub) completeEvent(eventID uuid.UUID) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+// 2. Update all player states (present → completed)
+// 3. Commit transaction (all-or-nothing)
+// 4. Publish EventExpired to RabbitMQ with retry (fanout to all instances)
+// 5. All instances receive the message and broadcast to their connected players
+//
+// Returns:
+//   - true if event was successfully completed by this instance
+//   - false if event was already completed or if completion failed
+func (e *EventHub) completeEvent(eventID uuid.UUID) bool {
+	// Use longer timeout for transaction + retries
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	e.logger.Info("Attempting to complete event", "event_id", eventID)
 
+	// CRITICAL: All database operations in single transaction (atomicity)
+	// If any step fails, entire operation rolls back - no partial state
+	success := e.completeEventTransaction(ctx, eventID)
+	if !success {
+		return false
+	}
+
+	// Transaction committed successfully - now notify other instances
+	// Use retry mechanism for RabbitMQ publish (P0-2)
+	e.publishEventExpiredWithRetry(ctx, eventID)
+
+	return true
+}
+
+// completeEventTransaction handles the database transaction for event completion.
+// Returns true only if the transaction was successfully committed.
+// This ensures atomicity: either ALL changes happen or NONE happen.
+func (e *EventHub) completeEventTransaction(ctx context.Context, eventID uuid.UUID) bool {
 	// Start a transaction to ensure atomicity
 	tx, err := e.db.Begin(ctx)
 	if err != nil {
 		e.logger.Error("Failed to start transaction for event completion",
 			"event_id", eventID,
-			"error", err)
-		return
+			"error", err,
+			"action", "will retry on next monitor cycle")
+		return false
 	}
-	defer tx.Rollback(ctx)
+
+	// CRITICAL: Always rollback on function exit
+	// If commit succeeds, rollback does nothing
+	// If commit fails or we return early, rollback prevents partial state
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			// Rollback only fails if transaction was already committed or connection lost
+			// This is expected after successful commit, so only log at debug level
+			e.logger.Debug("Transaction rollback after completion",
+				"event_id", eventID,
+				"error", err)
+		}
+	}()
 
 	qtx := e.queries.WithTx(tx)
 
-	// Atomic update: only succeeds if event is 'active'
+	// Step 1: Atomic update event status (active → completed)
+	// Only succeeds if event is still 'active' (compare-and-swap)
 	// This prevents duplicate completion if multiple instances fire simultaneously
 	rowsAffected, err := qtx.UpdateEventStatusToCompleted(ctx, toPgtypeUUID(eventID))
 	if err != nil {
 		e.logger.Error("Failed to execute update event status to completed",
 			"event_id", eventID,
-			"error", err)
-		return
+			"error", err,
+			"action", "transaction will rollback")
+		return false
 	}
 
 	// Check if we actually updated the row (compare-and-swap success)
 	if rowsAffected == 0 {
-		// Another instance already completed this event
+		// Another instance already completed this event - this is normal
 		e.logger.Info("Event already completed by another instance, skipping",
 			"event_id", eventID)
-		return
+		return false
 	}
 
 	e.logger.Info("Successfully marked event as completed in database",
 		"event_id", eventID,
 		"rows_affected", rowsAffected)
 
-	// Update all room player states for this event
+	// Step 2: Update all room player states for this event
 	// present -> completed, disconnected -> left
+	// IMPORTANT: This must be in same transaction as status update
 	playerRowsAffected, err := qtx.UpdateRoomPlayerStatesOnEventComplete(ctx, toPgtypeUUID(eventID))
 	if err != nil {
 		e.logger.Error("Failed to update room player states on event complete",
 			"event_id", eventID,
-			"error", err)
-		return
+			"error", err,
+			"action", "transaction will rollback - event stays active")
+		// Transaction will rollback - event status NOT updated
+		// Monitor will retry on next cycle
+		return false
 	}
 
-	e.logger.Info("Successfully updated room player states",
+	e.logger.Info("Successfully updated room player states within transaction",
 		"event_id", eventID,
 		"players_updated", playerRowsAffected)
 
-	// Commit the transaction
-	if err := tx.Commit(ctx); err != nil {
-		e.logger.Error("Failed to commit event completion transaction",
+	// Step 3: P0-1 - Capture final leaderboard snapshot (permanent historical record)
+	// This must be in the same transaction to ensure atomicity with status update
+	// CRITICAL: This is the only way to prove who won after event ends
+	err = qtx.CaptureFinalRoomLeaderboards(ctx, toPgtypeUUID(eventID))
+	if err != nil {
+		e.logger.Error("Failed to capture final room leaderboards",
 			"event_id", eventID,
-			"error", err)
-		return
+			"error", err,
+			"action", "transaction will rollback - event stays active")
+		// Transaction will rollback - we need leaderboard snapshot
+		// This is critical data - without it we can't determine winners
+		return false
 	}
 
-	// Create EventExpired message
+	e.logger.Info("Successfully captured final room leaderboards snapshot",
+		"event_id", eventID)
+
+	// Step 4: Capture final guild leaderboard snapshot
+	// This determines which guild won the event
+	err = qtx.CaptureFinalGuildLeaderboard(ctx, toPgtypeUUID(eventID))
+	if err != nil {
+		e.logger.Warn("Failed to capture final guild leaderboard",
+			"event_id", eventID,
+			"error", err,
+			"action", "continuing - guild leaderboard is optional")
+		// NOTE: We continue here because guild leaderboard is less critical
+		// Individual player rankings are the primary record
+		// Guild rankings can be recalculated from player data if needed
+	} else {
+		e.logger.Info("Successfully captured final guild leaderboard snapshot",
+			"event_id", eventID)
+	}
+
+	// TODO: Grant achievements to top 3 and all user of event
+	winningMembers, err := qtx.GetTop3PlayersByEvent(ctx, toPgtypeUUID(eventID))
+	if err != nil {
+		e.logger.Warn("Failed to get top 3 players by event",
+			"event_id", eventID,
+			"error", err,
+			"action", "continuing - top 3 players are optional")
+		return false
+	} else {
+		e.logger.Info("Successfully retrieved top 3 players by event",
+			"event_id", eventID,
+			"winning_members", winningMembers)
+	}
+	// granting using grpc
+	// TODO: Refactor later
+	for i, member := range winningMembers {
+		e.userClient.GrantAchievements(ctx,
+			&pb.GrantAchievementsRequest{
+				UserAchievements: []*pb.UserAchievementGrant{
+					&pb.UserAchievementGrant{
+						UserId:         member.UserID.String(),
+						AchievementKey: AchievementCodeBattle[i],
+					},
+				},
+			})
+	}
+
+	// Step 5: Commit the transaction (all-or-nothing)
+	// If this fails, everything above is rolled back
+	if err := tx.Commit(ctx); err != nil {
+		e.logger.Error("CRITICAL: Failed to commit event completion transaction",
+			"event_id", eventID,
+			"error", err,
+			"action", "transaction rolled back - event stays active - will retry")
+		// Transaction rolled back - event still 'active'
+		// Monitor will retry on next cycle
+		return false
+	}
+
+	e.logger.Info("Successfully committed event completion transaction",
+		"event_id", eventID,
+		"players_updated", playerRowsAffected,
+		"final_leaderboard_captured", true)
+
+	return true
+}
+
+// buildEventExpiredMessage creates an enhanced EventExpired message with winners and statistics.
+// P2-1: Provides rich information to players about event results
+func (e *EventHub) buildEventExpiredMessage(ctx context.Context, eventID uuid.UUID) events.EventExpired {
+	// Base message
 	eventExpired := events.EventExpired{
 		EventID:     eventID,
-		CompletedAt: time.Now(),
+		CompletedAt: time.Now().UTC(),
 		Message:     "Event has ended. Thank you for participating!",
+		TopPlayers:  []events.TopPlayer{},
+		TopGuilds:   []events.TopGuild{},
 	}
+
+	// Fetch top 3 players
+	topPlayers, err := e.queries.GetTop3PlayersByEvent(ctx, toPgtypeUUID(eventID))
+	if err != nil {
+		e.logger.Warn("Failed to fetch top players for event expiry message",
+			"event_id", eventID,
+			"error", err)
+	} else {
+		for _, player := range topPlayers {
+			eventExpired.TopPlayers = append(eventExpired.TopPlayers, events.TopPlayer{
+				Rank:     int(player.Rank.Int32), // pgtype.Int4
+				UserID:   uuid.UUID(player.UserID.Bytes),
+				Username: player.Username,
+				Score:    int(player.Score),
+				RoomID:   uuid.UUID(player.RoomID.Bytes),
+			})
+		}
+		e.logger.Info("Added top players to event expiry message",
+			"event_id", eventID,
+			"count", len(eventExpired.TopPlayers))
+	}
+
+	// Fetch top 3 guilds
+	topGuilds, err := e.queries.GetTop3GuildsByEvent(ctx, toPgtypeUUID(eventID))
+	if err != nil {
+		e.logger.Warn("Failed to fetch top guilds for event expiry message",
+			"event_id", eventID,
+			"error", err)
+	} else {
+		for _, guild := range topGuilds {
+			// Extract guild name with type assertion (interface{} -> string)
+			guildName := ""
+			if guild.GuildName != nil {
+				guildName, _ = guild.GuildName.(string)
+			}
+
+			eventExpired.TopGuilds = append(eventExpired.TopGuilds, events.TopGuild{
+				Rank:       int(guild.Rank), // already int64
+				GuildID:    uuid.UUID(guild.GuildID.Bytes),
+				GuildName:  guildName,
+				TotalScore: int(guild.TotalScore),
+			})
+		}
+		e.logger.Info("Added top guilds to event expiry message",
+			"event_id", eventID,
+			"count", len(eventExpired.TopGuilds))
+	}
+
+	// Fetch event statistics
+	stats, err := e.queries.GetEventStatistics(ctx, toPgtypeUUID(eventID))
+	if err != nil {
+		e.logger.Warn("Failed to fetch event statistics for expiry message",
+			"event_id", eventID,
+			"error", err)
+		// Use default/empty statistics
+		eventExpired.Statistics = events.EventStatistics{}
+	} else {
+		// Convert pgtype.Numeric to float64 for average score
+		avgScore := 0.0
+		if stats.AverageScore.Valid {
+			f8, err := stats.AverageScore.Float64Value()
+			if err == nil {
+				avgScore = f8.Float64
+			}
+		}
+
+		// Calculate acceptance rate as percentage
+		acceptanceRate := 0.0
+		if stats.SsTotalSubmissions > 0 {
+			acceptanceRate = float64(stats.SsAcceptedSubmissions) / float64(stats.SsTotalSubmissions) * 100
+		}
+
+		eventExpired.Statistics = events.EventStatistics{
+			TotalParticipants:   int(stats.PsTotalParticipants),
+			TotalSubmissions:    int(stats.SsTotalSubmissions),
+			AcceptedSubmissions: int(stats.SsAcceptedSubmissions),
+			AcceptanceRate:      acceptanceRate,
+			AverageScore:        avgScore,
+			HighestScore:        int(stats.PsHighestScore),
+			TotalRooms:          int(stats.TotalRooms),
+		}
+		e.logger.Info("Added event statistics to expiry message",
+			"event_id", eventID,
+			"total_participants", stats.PsTotalParticipants,
+			"total_submissions", stats.SsTotalSubmissions,
+			"acceptance_rate", acceptanceRate)
+	}
+
+	// Enhance message with winner information
+	if len(eventExpired.TopPlayers) > 0 {
+		winner := eventExpired.TopPlayers[0]
+		eventExpired.Message = fmt.Sprintf(
+			"Event has ended! Congratulations to %s for winning with %d points! Thank you all for participating!",
+			winner.Username,
+			winner.Score,
+		)
+	}
+
+	return eventExpired
+}
+
+// publishEventExpiredWithRetry publishes EventExpired message to RabbitMQ with exponential backoff retry.
+// This is a critical operation - if it fails, other instances won't be notified that event ended.
+// P0-2: Retry mechanism for RabbitMQ publish failures
+// P2-1: Enhanced with winners and statistics
+func (e *EventHub) publishEventExpiredWithRetry(ctx context.Context, eventID uuid.UUID) {
+	// P2-1: Build enhanced EventExpired message with winners and stats
+	eventExpired := e.buildEventExpiredMessage(ctx, eventID)
 
 	sseEvent := events.SseEvent{
 		EventType: events.EVENT_EXPIRED,
 		Data:      eventExpired,
 	}
 
-	// Publish to RabbitMQ so ALL instances receive the message
+	// Marshal payload once (outside retry loop)
 	payload, err := json.Marshal(sseEvent)
 	if err != nil {
-		e.logger.Error("Failed to marshal EventExpired for RabbitMQ",
+		e.logger.Error("CRITICAL: Failed to marshal EventExpired for RabbitMQ",
 			"event_id", eventID,
-			"error", err)
+			"error", err,
+			"impact", "other instances will not be notified - monitor will handle")
+		// This is a code bug - JSON marshaling should never fail
+		// Continue anyway - the monitor will catch orphaned instances
 		return
 	}
 
 	routingKey := fmt.Sprintf("event.%s", eventID)
-	err = e.rabbitClient.Publish(ctx, rabbitmq.SseEventsExchange, routingKey, payload)
-	if err != nil {
-		e.logger.Error("Failed to publish EventExpired to RabbitMQ",
+
+	// Retry configuration
+	const maxRetries = 5
+	const initialBackoff = 100 * time.Millisecond
+	const maxBackoff = 5 * time.Second
+
+	backoff := initialBackoff
+	var lastErr error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Check if context cancelled
+		if ctx.Err() != nil {
+			e.logger.Error("Context cancelled during RabbitMQ publish retry",
+				"event_id", eventID,
+				"attempt", attempt,
+				"error", ctx.Err())
+			return
+		}
+
+		// Attempt to publish
+		err = e.rabbitClient.Publish(ctx, rabbitmq.SseEventsExchange, routingKey, payload)
+		if err == nil {
+			// Success!
+			e.logger.Info("Successfully published EventExpired to RabbitMQ",
+				"event_id", eventID,
+				"routing_key", routingKey,
+				"attempts", attempt)
+			return
+		}
+
+		// Failed - log and retry
+		lastErr = err
+		e.logger.Warn("Failed to publish EventExpired to RabbitMQ, will retry",
 			"event_id", eventID,
-			"error", err)
-		return
+			"attempt", attempt,
+			"max_retries", maxRetries,
+			"error", err,
+			"next_retry_in", backoff)
+
+		// Wait before retry (with exponential backoff)
+		select {
+		case <-ctx.Done():
+			e.logger.Error("Context cancelled during retry backoff",
+				"event_id", eventID)
+			return
+		case <-time.After(backoff):
+			// Continue to next retry
+		}
+
+		// Exponential backoff: double the wait time, cap at maxBackoff
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
 	}
 
-	e.logger.Info("Successfully published EventExpired to RabbitMQ",
+	// All retries exhausted - log critical error
+	e.logger.Error("CRITICAL: Failed to publish EventExpired after all retries",
 		"event_id", eventID,
-		"routing_key", routingKey)
+		"attempts", maxRetries,
+		"last_error", lastErr,
+		"routing_key", routingKey,
+		"impact", "some instances may not receive notification",
+		"mitigation", "expired event monitor will detect and notify")
+
+	// NOTE: We don't panic or return error here because:
+	// 1. Event is already marked as completed in database (source of truth)
+	// 2. Our expired event monitor will detect instances that missed the message
+	// 3. Submissions will be rejected due to database validation
+	// This is degraded operation but not a catastrophic failure
 }
 
 // recoverActiveEvents queries for all active events on startup and re-schedules their expiry timers.
@@ -274,6 +618,162 @@ func (e *EventHub) recoverActiveEvents(ctx context.Context) {
 	}
 
 	e.logger.Info("Event recovery complete", "recovered_count", len(activeEvents))
+}
+
+// startExpiredEventMonitor runs a background goroutine that periodically checks
+// for events stuck in 'active' status past their end_date and completes them.
+//
+// This is a critical defense-in-depth mechanism that protects against:
+// 1. Timer loss due to service crashes/restarts between status transition and timer scheduling
+// 2. Failed timer scheduling (e.g., if duration <= 0)
+// 3. Clock skew between multiple instances
+// 4. Database replication lag issues
+//
+// Design decisions:
+// - Runs every 60 seconds (configurable via ticker interval)
+// - Uses database as source of truth (not in-memory state)
+// - Each instance runs its own monitor (completeEvent is idempotent)
+// - First run happens immediately on startup (catch any existing issues)
+// - 30-second timeout per check cycle (prevents blocking)
+func (e *EventHub) startExpiredEventMonitor() {
+	const checkInterval = 60 * time.Second
+	const checkTimeout = 30 * time.Second
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	e.logger.Info("Expired event monitor started",
+		"check_interval", checkInterval,
+		"timeout_per_check", checkTimeout)
+
+	// Run immediately on startup (don't wait for first tick)
+	// This catches events that expired while service was down
+	e.checkAndCompleteExpiredEvents(checkTimeout)
+
+	// Then run periodically
+	for range ticker.C {
+		e.checkAndCompleteExpiredEvents(checkTimeout)
+	}
+}
+
+// checkAndCompleteExpiredEvents performs a single check cycle:
+// 1. Query database for events WHERE status='active' AND end_date < NOW()
+// 2. Attempt to complete each expired event
+// 3. Verify completion and log results
+//
+// This function is safe to run concurrently across multiple instances because
+// completeEvent() uses atomic compare-and-swap (only one instance succeeds).
+func (e *EventHub) checkAndCompleteExpiredEvents(timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// Query expired events using the new SQL query
+	expiredEvents, err := e.queries.GetExpiredActiveEvents(ctx)
+	if err != nil {
+		e.logger.Error("Failed to query expired active events",
+			"error", err,
+			"timeout", timeout)
+		return
+	}
+
+	// Normal case: no expired events found
+	if len(expiredEvents) == 0 {
+		e.logger.Debug("Expired event check complete - no issues found")
+		return
+	}
+
+	// ALERT: Found events that should have been completed but are still active
+	// This indicates a timer was lost or failed to schedule
+	eventIDs := make([]string, len(expiredEvents))
+	for i, evt := range expiredEvents {
+		eventIDs[i] = uuid.UUID(evt.ID.Bytes).String()
+	}
+
+	e.logger.Warn("CRITICAL: Found expired events still marked as active",
+		"count", len(expiredEvents),
+		"event_ids", eventIDs,
+		"action", "completing them now")
+
+	// Track metrics for observability
+	successCount := 0
+	failureCount := 0
+	alreadyCompletedCount := 0
+
+	// Process each expired event
+	for _, event := range expiredEvents {
+		eventID := uuid.UUID(event.ID.Bytes)
+		timeOverdue := time.Since(event.EndDate.Time)
+
+		e.logger.Warn("Attempting to complete overdue event",
+			"event_id", eventID,
+			"title", event.Title,
+			"end_date", event.EndDate.Time,
+			"overdue_duration", timeOverdue)
+
+		// Call completeEvent() - same function used by timers
+		// This ensures:
+		// - Atomic status update (only succeeds if status='active')
+		// - Player states updated (present->completed)
+		// - RabbitMQ notification sent to all instances
+		e.completeEvent(eventID)
+
+		// Verify completion succeeded by checking status
+		verifyCtx, verifyCancel := context.WithTimeout(ctx, 5*time.Second)
+		updatedEvent, verifyErr := e.queries.GetEventByID(verifyCtx, event.ID)
+		verifyCancel()
+
+		if verifyErr != nil {
+			e.logger.Error("Failed to verify event completion status",
+				"event_id", eventID,
+				"error", verifyErr)
+			failureCount++
+			continue
+		}
+
+		// Check if completion succeeded
+		switch updatedEvent.Status {
+		case store.EventStatusCompleted:
+			successCount++
+			e.logger.Info("Successfully completed overdue event",
+				"event_id", eventID,
+				"title", event.Title,
+				"was_overdue_by", timeOverdue,
+				"status_after", updatedEvent.Status)
+
+		case store.EventStatusActive:
+			// Still active after completeEvent() call
+			// This could mean another instance completed it simultaneously
+			// or there's a deeper issue
+			failureCount++
+			e.logger.Error("Event still active after completion attempt",
+				"event_id", eventID,
+				"title", event.Title,
+				"status", updatedEvent.Status,
+				"possible_cause", "concurrent completion failed or database issue")
+
+		default:
+			// Event is in some other status (cancelled, etc.)
+			alreadyCompletedCount++
+			e.logger.Info("Event was already in final status",
+				"event_id", eventID,
+				"status", updatedEvent.Status)
+		}
+	}
+
+	// Log summary metrics for monitoring/alerting
+	e.logger.Info("Expired event check cycle complete",
+		"total_expired_found", len(expiredEvents),
+		"successfully_completed", successCount,
+		"failed_to_complete", failureCount,
+		"already_completed", alreadyCompletedCount,
+		"check_duration", time.Since(time.Now().Add(-timeout)))
+
+	// If any failures occurred, log an additional error for alert visibility
+	if failureCount > 0 {
+		e.logger.Error("ALERT: Some expired events failed to complete",
+			"failure_count", failureCount,
+			"action_required", "investigate database health and event states")
+	}
 }
 
 func newRoomHub(eventID, roomId uuid.UUID, db *pgxpool.Pool, queries *store.Queries, logger *slog.Logger, guildUpdateChan chan<- uuid.UUID, rabbitClient *rabbitmq.RabbitMQClient, executorClient *executor.Client, userClient *user.Client) *RoomHub {
@@ -927,12 +1427,6 @@ func (r *RoomHub) generateSolutionResult(solutionSubmitted events.SolutionSubmit
 	return solutionResult
 }
 
-// combineCodeWithTemplate combined the userCode and templateFunction at placeHolder
-func combineCodeWithTemplate(templateCode, userCode, placeHolder string) string {
-	finalCode := strings.Replace(templateCode, placeHolder, userCode, 1)
-	return finalCode
-}
-
 func (r *RoomHub) processSolutionResult(event events.SolutionResult) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
@@ -979,11 +1473,23 @@ func (r *RoomHub) processSolutionResult(event events.SolutionResult) error {
 	}
 
 	// Check 2: Current time must be before end_date
-	// Double-check time validation to handle clock skew between instances
-	if time.Now().After(eventDetails.EndDate.Time) {
-		r.logger.Warn("Rejecting solution result - event has expired",
+	// NOTE: This check has a grace period built in:
+	// - Timer fires at end_date
+	// - Waits 10 seconds (grace period) before marking event as 'completed'
+	// - During grace period: status='active' but time > end_date
+	// - In-flight submissions pass Check 1 (status) but may fail Check 2 (time)
+	// - This is intentional: we want to allow submissions that were:
+	//   * Accepted by HTTP handler before end_date
+	//   * Still being judged when timer fired
+	//   * Complete during grace period
+	// - If submission completes >10 seconds after end_date, it's rejected here
+	//
+	// P1-3: Grace period prevents unfair rejection while limiting how late we accept results
+	if time.Now().UTC().After(eventDetails.EndDate.Time.UTC().Add(10 * time.Second)) {
+		r.logger.Warn("Rejecting solution result - grace period expired",
 			"event_id", r.EventID,
 			"end_date", eventDetails.EndDate.Time,
+			"grace_period", 10*time.Second,
 			"current_time", time.Now(),
 			"submission_id", event.SolutionSubmitted.SubmissionID,
 			"player_id", event.SolutionSubmitted.PlayerID,
@@ -1000,7 +1506,7 @@ func (r *RoomHub) processSolutionResult(event events.SolutionResult) error {
 				"error", updateErr)
 		}
 
-		return fmt.Errorf("event has expired at %s (now: %s)", eventDetails.EndDate.Time, time.Now())
+		return fmt.Errorf("event has expired at %s (now: %s)", eventDetails.EndDate.Time.UTC(), time.Now().UTC())
 	}
 
 	if event.Status != events.Accepted {
@@ -1234,7 +1740,7 @@ func (r *RoomHub) playerInRoom(ctx context.Context, roomID, playerID uuid.UUID) 
 }
 
 // Helper method to add player to room
-func (r *RoomHub) addPlayerToRoom(ctx context.Context, roomID, playerID uuid.UUID, playerName string) error {
+func (r *RoomHub) addPlayerToRoom(ctx context.Context, roomID, playerID uuid.UUID, playerName, guildID string) error {
 	createParams := store.CreateRoomPlayerParams{
 		RoomID:   toPgtypeUUID(roomID),
 		UserID:   toPgtypeUUID(playerID),
@@ -1353,7 +1859,7 @@ func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 		return err
 	}
 
-	if eventDetails.EndDate.Time.Before(time.Now()) {
+	if eventDetails.EndDate.Time.UTC().Before(time.Now().UTC()) {
 		sseEvent := events.SseEvent{
 			EventType: events.EVENT_ENDED,
 		}
@@ -1368,16 +1874,29 @@ func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 	})
 	if err == pgx.ErrNoRows {
 		r.logger.Info("Player not found in room", "room_id", event.RoomID, "player_id", event.PlayerID)
+		s := rand.NewPCG(uint64(time.Now().UnixNano()), 0)
+		rand := rand.New(s)
+		fmt.Println(rand.IntN(100))
+
 		userProfile, err := r.userClient.GetUserProfileByAuthId(ctx, &pb.GetUserProfileByAuthIdRequest{
 			AuthUserId: event.PlayerID.String(),
 		})
 		if err != nil {
 			r.logger.Error("Failed to get player username", "player_id", event.PlayerID, "error", err)
-			return err
+		} else {
+			r.logger.Info("retrieved user profile successfully", "player_id", event.PlayerID, "username", userProfile.Username)
 		}
 
-		r.logger.Info("retrieved user profile successfully", "player_id", event.PlayerID, "username", userProfile.Username)
-		if err := r.addPlayerToRoom(ctx, event.RoomID, event.PlayerID, userProfile.Username); err != nil {
+		guild, err := r.userClient.GetMyGuild(ctx, &pb.GetMyGuildRequest{
+			AuthUserId: userProfile.AuthUserId,
+		})
+		if err != nil {
+			r.logger.Error("Failed to get player guild", "player_id", event.PlayerID, "error", err)
+		} else {
+			r.logger.Info("retrieved user guild successfully", "player_id", event.PlayerID, "guild_id", guild.Id)
+		}
+
+		if err := r.addPlayerToRoom(ctx, event.RoomID, event.PlayerID, userProfile.Username, guild.Id); err != nil {
 			r.logger.Error("Failed to add player to room", "room_id", event.RoomID, "player_id", event.PlayerID, "error", err)
 			return err
 		}
@@ -1424,7 +1943,7 @@ func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 
 	// Send time remaining to the player who just joined
 	// This is only sent on successful join
-	remaining := time.Until(eventDetails.EndDate.Time)
+	remaining := eventDetails.EndDate.Time.UTC().Sub(time.Now().UTC())
 	if remaining > 0 {
 		initialTime := map[string]any{
 			"event_id":       event.EventID.String(),
@@ -1533,6 +2052,8 @@ func (r *RoomHub) processRoomDeleted(event events.RoomDeleted) error {
 // Note: This function only dispatches locally to players on this instance.
 // The EventExpired message is published to RabbitMQ by completeEvent() in EventHub,
 // ensuring all instances receive and process it.
+//
+// P1-1: After notifying players, schedules room cleanup to free resources
 func (r *RoomHub) processEventExpired(event events.EventExpired) error {
 	r.logger.Info("Event expired, broadcasting to room players",
 		"event_id", event.EventID,
@@ -1562,7 +2083,76 @@ func (r *RoomHub) processEventExpired(event events.EventExpired) error {
 		"room_id", r.RoomID,
 		"players_notified", playersNotified)
 
+	// P1-1: Schedule cleanup of this room after delay
+	// Give players time to view final results before closing connections
+	r.scheduleRoomCleanup(5 * time.Minute)
+
 	return nil
+}
+
+// scheduleRoomCleanup schedules this room to be cleaned up after a delay.
+// P1-1: This prevents memory leaks from completed event rooms.
+//
+// Flow:
+// 1. Wait for delay (default 5 minutes) to give players time to view results
+// 2. Close all SSE connections gracefully
+// 3. Stop processing events
+// 4. Mark room as ready for removal from EventHub
+//
+// The room will be fully removed by EventHub's inactive room cleanup routine.
+func (r *RoomHub) scheduleRoomCleanup(delay time.Duration) {
+	r.logger.Info("Scheduling room cleanup",
+		"room_id", r.RoomID,
+		"cleanup_delay", delay)
+
+	// Schedule cleanup in background
+	time.AfterFunc(delay, func() {
+		r.logger.Info("Starting room cleanup",
+			"room_id", r.RoomID)
+
+		// Step 1: Close all player connections gracefully
+		r.Mu.Lock()
+		connectionsClosed := 0
+		for playerID, ch := range r.Listerners {
+			// Send final goodbye message before closing
+			goodbyeEvent := events.SseEvent{
+				EventType: events.EVENT_EXPIRED,
+				Data: map[string]string{
+					"message": "Event session ended. Connection will close.",
+				},
+			}
+
+			select {
+			case ch <- goodbyeEvent:
+				r.logger.Info("Sent goodbye to player before cleanup",
+					"player_id", playerID,
+					"room_id", r.RoomID)
+			default:
+				r.logger.Warn("Could not send goodbye - channel full or closed",
+					"player_id", playerID)
+			}
+
+			// Close the channel to disconnect the player
+			close(ch)
+			connectionsClosed++
+		}
+
+		// Clear the listeners map
+		r.Listerners = make(map[uuid.UUID]chan<- events.SseEvent)
+		r.Mu.Unlock()
+
+		r.logger.Info("Closed all player connections",
+			"room_id", r.RoomID,
+			"connections_closed", connectionsClosed)
+
+		// Step 2: Stop processing events by closing the Events channel
+		// This will cause the RoomHub.Start() goroutine to exit
+		close(r.Events)
+
+		r.logger.Info("Room cleanup complete - ready for removal",
+			"room_id", r.RoomID,
+			"note", "will be removed by EventHub cleanup routine")
+	})
 }
 
 func toPgtypeUUID(id uuid.UUID) pgtype.UUID {

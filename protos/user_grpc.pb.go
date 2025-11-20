@@ -338,13 +338,14 @@ var UserContextService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	AchievementsService_GetAll_FullMethodName          = "/user.v1.AchievementsService/GetAll"
-	AchievementsService_Create_FullMethodName          = "/user.v1.AchievementsService/Create"
-	AchievementsService_Update_FullMethodName          = "/user.v1.AchievementsService/Update"
-	AchievementsService_Delete_FullMethodName          = "/user.v1.AchievementsService/Delete"
-	AchievementsService_AwardToUser_FullMethodName     = "/user.v1.AchievementsService/AwardToUser"
-	AchievementsService_RevokeFromUser_FullMethodName  = "/user.v1.AchievementsService/RevokeFromUser"
-	AchievementsService_GetByAuthUserId_FullMethodName = "/user.v1.AchievementsService/GetByAuthUserId"
+	AchievementsService_GetAll_FullMethodName            = "/user.v1.AchievementsService/GetAll"
+	AchievementsService_Create_FullMethodName            = "/user.v1.AchievementsService/Create"
+	AchievementsService_Update_FullMethodName            = "/user.v1.AchievementsService/Update"
+	AchievementsService_Delete_FullMethodName            = "/user.v1.AchievementsService/Delete"
+	AchievementsService_AwardToUser_FullMethodName       = "/user.v1.AchievementsService/AwardToUser"
+	AchievementsService_RevokeFromUser_FullMethodName    = "/user.v1.AchievementsService/RevokeFromUser"
+	AchievementsService_GrantAchievements_FullMethodName = "/user.v1.AchievementsService/GrantAchievements"
+	AchievementsService_GetByAuthUserId_FullMethodName   = "/user.v1.AchievementsService/GetByAuthUserId"
 )
 
 // AchievementsServiceClient is the client API for AchievementsService service.
@@ -357,6 +358,7 @@ type AchievementsServiceClient interface {
 	Delete(ctx context.Context, in *DeleteAchievementRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	AwardToUser(ctx context.Context, in *AwardAchievementToUserRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	RevokeFromUser(ctx context.Context, in *RevokeAchievementFromUserRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GrantAchievements(ctx context.Context, in *GrantAchievementsRequest, opts ...grpc.CallOption) (*GrantAchievementsResponse, error)
 	GetByAuthUserId(ctx context.Context, in *GetUserAchievementsByAuthUserIdRequest, opts ...grpc.CallOption) (*UserAchievementList, error)
 }
 
@@ -428,6 +430,16 @@ func (c *achievementsServiceClient) RevokeFromUser(ctx context.Context, in *Revo
 	return out, nil
 }
 
+func (c *achievementsServiceClient) GrantAchievements(ctx context.Context, in *GrantAchievementsRequest, opts ...grpc.CallOption) (*GrantAchievementsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GrantAchievementsResponse)
+	err := c.cc.Invoke(ctx, AchievementsService_GrantAchievements_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *achievementsServiceClient) GetByAuthUserId(ctx context.Context, in *GetUserAchievementsByAuthUserIdRequest, opts ...grpc.CallOption) (*UserAchievementList, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UserAchievementList)
@@ -448,6 +460,7 @@ type AchievementsServiceServer interface {
 	Delete(context.Context, *DeleteAchievementRequest) (*emptypb.Empty, error)
 	AwardToUser(context.Context, *AwardAchievementToUserRequest) (*emptypb.Empty, error)
 	RevokeFromUser(context.Context, *RevokeAchievementFromUserRequest) (*emptypb.Empty, error)
+	GrantAchievements(context.Context, *GrantAchievementsRequest) (*GrantAchievementsResponse, error)
 	GetByAuthUserId(context.Context, *GetUserAchievementsByAuthUserIdRequest) (*UserAchievementList, error)
 	mustEmbedUnimplementedAchievementsServiceServer()
 }
@@ -476,6 +489,9 @@ func (UnimplementedAchievementsServiceServer) AwardToUser(context.Context, *Awar
 }
 func (UnimplementedAchievementsServiceServer) RevokeFromUser(context.Context, *RevokeAchievementFromUserRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RevokeFromUser not implemented")
+}
+func (UnimplementedAchievementsServiceServer) GrantAchievements(context.Context, *GrantAchievementsRequest) (*GrantAchievementsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GrantAchievements not implemented")
 }
 func (UnimplementedAchievementsServiceServer) GetByAuthUserId(context.Context, *GetUserAchievementsByAuthUserIdRequest) (*UserAchievementList, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetByAuthUserId not implemented")
@@ -609,6 +625,24 @@ func _AchievementsService_RevokeFromUser_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AchievementsService_GrantAchievements_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantAchievementsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AchievementsServiceServer).GrantAchievements(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AchievementsService_GrantAchievements_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AchievementsServiceServer).GrantAchievements(ctx, req.(*GrantAchievementsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AchievementsService_GetByAuthUserId_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetUserAchievementsByAuthUserIdRequest)
 	if err := dec(in); err != nil {
@@ -657,6 +691,10 @@ var AchievementsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RevokeFromUser",
 			Handler:    _AchievementsService_RevokeFromUser_Handler,
+		},
+		{
+			MethodName: "GrantAchievements",
+			Handler:    _AchievementsService_GrantAchievements_Handler,
 		},
 		{
 			MethodName: "GetByAuthUserId",

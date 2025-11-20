@@ -77,8 +77,45 @@ type RoomDeleted struct {
 	RoomID uuid.UUID
 }
 
+// EventExpired is sent to all players when an event ends.
+// P2-1: Enhanced with winners, statistics, and final results
 type EventExpired struct {
 	EventID     uuid.UUID `json:"event_id"`
 	CompletedAt time.Time `json:"completed_at"`
 	Message     string    `json:"message"`
+
+	// P2-1: Top performers
+	TopPlayers []TopPlayer `json:"top_players,omitempty"`
+	TopGuilds  []TopGuild  `json:"top_guilds,omitempty"`
+
+	// P2-1: Event statistics
+	Statistics EventStatistics `json:"statistics"`
+}
+
+// TopPlayer represents a top-ranked player in the event
+type TopPlayer struct {
+	Rank     int       `json:"rank"`
+	UserID   uuid.UUID `json:"user_id"`
+	Username string    `json:"username"`
+	Score    int       `json:"score"`
+	RoomID   uuid.UUID `json:"room_id,omitempty"`
+}
+
+// TopGuild represents a top-ranked guild in the event
+type TopGuild struct {
+	Rank       int       `json:"rank"`
+	GuildID    uuid.UUID `json:"guild_id"`
+	GuildName  string    `json:"guild_name"`
+	TotalScore int       `json:"total_score"`
+}
+
+// EventStatistics contains aggregate statistics about the event
+type EventStatistics struct {
+	TotalParticipants   int     `json:"total_participants"`
+	TotalSubmissions    int     `json:"total_submissions"`
+	AcceptedSubmissions int     `json:"accepted_submissions"`
+	AcceptanceRate      float64 `json:"acceptance_rate"`
+	AverageScore        float64 `json:"average_score"`
+	HighestScore        int     `json:"highest_score"`
+	TotalRooms          int     `json:"total_rooms"`
 }

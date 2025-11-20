@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.10
 // 	protoc        v6.32.1
-// source: event.proto
+// source: protos/event.proto
 
 package protos
 
@@ -61,11 +61,11 @@ func (x EventType) String() string {
 }
 
 func (EventType) Descriptor() protoreflect.EnumDescriptor {
-	return file_event_proto_enumTypes[0].Descriptor()
+	return file_protos_event_proto_enumTypes[0].Descriptor()
 }
 
 func (EventType) Type() protoreflect.EnumType {
-	return &file_event_proto_enumTypes[0]
+	return &file_protos_event_proto_enumTypes[0]
 }
 
 func (x EventType) Number() protoreflect.EnumNumber {
@@ -74,7 +74,7 @@ func (x EventType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use EventType.Descriptor instead.
 func (EventType) EnumDescriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{0}
+	return file_protos_event_proto_rawDescGZIP(), []int{0}
 }
 
 type SubmissionStatus int32
@@ -122,11 +122,11 @@ func (x SubmissionStatus) String() string {
 }
 
 func (SubmissionStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_event_proto_enumTypes[1].Descriptor()
+	return file_protos_event_proto_enumTypes[1].Descriptor()
 }
 
 func (SubmissionStatus) Type() protoreflect.EnumType {
-	return &file_event_proto_enumTypes[1]
+	return &file_protos_event_proto_enumTypes[1]
 }
 
 func (x SubmissionStatus) Number() protoreflect.EnumNumber {
@@ -135,7 +135,7 @@ func (x SubmissionStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SubmissionStatus.Descriptor instead.
 func (SubmissionStatus) EnumDescriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{1}
+	return file_protos_event_proto_rawDescGZIP(), []int{1}
 }
 
 type PaginationRequest struct {
@@ -148,7 +148,7 @@ type PaginationRequest struct {
 
 func (x *PaginationRequest) Reset() {
 	*x = PaginationRequest{}
-	mi := &file_event_proto_msgTypes[0]
+	mi := &file_protos_event_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -160,7 +160,7 @@ func (x *PaginationRequest) String() string {
 func (*PaginationRequest) ProtoMessage() {}
 
 func (x *PaginationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[0]
+	mi := &file_protos_event_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -173,7 +173,7 @@ func (x *PaginationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PaginationRequest.ProtoReflect.Descriptor instead.
 func (*PaginationRequest) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{0}
+	return file_protos_event_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *PaginationRequest) GetPageSize() int32 {
@@ -203,7 +203,7 @@ type PaginationResult struct {
 
 func (x *PaginationResult) Reset() {
 	*x = PaginationResult{}
-	mi := &file_event_proto_msgTypes[1]
+	mi := &file_protos_event_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -215,7 +215,7 @@ func (x *PaginationResult) String() string {
 func (*PaginationResult) ProtoMessage() {}
 
 func (x *PaginationResult) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[1]
+	mi := &file_protos_event_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -228,7 +228,7 @@ func (x *PaginationResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PaginationResult.ProtoReflect.Descriptor instead.
 func (*PaginationResult) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{1}
+	return file_protos_event_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *PaginationResult) GetPageSize() int32 {
@@ -277,7 +277,7 @@ type Status struct {
 
 func (x *Status) Reset() {
 	*x = Status{}
-	mi := &file_event_proto_msgTypes[2]
+	mi := &file_protos_event_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -289,7 +289,7 @@ func (x *Status) String() string {
 func (*Status) ProtoMessage() {}
 
 func (x *Status) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[2]
+	mi := &file_protos_event_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -302,7 +302,7 @@ func (x *Status) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Status.ProtoReflect.Descriptor instead.
 func (*Status) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{2}
+	return file_protos_event_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Status) GetSuccess() bool {
@@ -340,7 +340,7 @@ type Event struct {
 
 func (x *Event) Reset() {
 	*x = Event{}
-	mi := &file_event_proto_msgTypes[3]
+	mi := &file_protos_event_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -352,7 +352,7 @@ func (x *Event) String() string {
 func (*Event) ProtoMessage() {}
 
 func (x *Event) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[3]
+	mi := &file_protos_event_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -365,7 +365,7 @@ func (x *Event) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Event.ProtoReflect.Descriptor instead.
 func (*Event) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{3}
+	return file_protos_event_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Event) GetId() string {
@@ -419,7 +419,7 @@ type GetEventsRequest struct {
 
 func (x *GetEventsRequest) Reset() {
 	*x = GetEventsRequest{}
-	mi := &file_event_proto_msgTypes[4]
+	mi := &file_protos_event_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -431,7 +431,7 @@ func (x *GetEventsRequest) String() string {
 func (*GetEventsRequest) ProtoMessage() {}
 
 func (x *GetEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[4]
+	mi := &file_protos_event_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -444,7 +444,7 @@ func (x *GetEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEventsRequest.ProtoReflect.Descriptor instead.
 func (*GetEventsRequest) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{4}
+	return file_protos_event_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *GetEventsRequest) GetPaginationRequest() *PaginationRequest {
@@ -465,7 +465,7 @@ type GetEventsResponse struct {
 
 func (x *GetEventsResponse) Reset() {
 	*x = GetEventsResponse{}
-	mi := &file_event_proto_msgTypes[5]
+	mi := &file_protos_event_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -477,7 +477,7 @@ func (x *GetEventsResponse) String() string {
 func (*GetEventsResponse) ProtoMessage() {}
 
 func (x *GetEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[5]
+	mi := &file_protos_event_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -490,7 +490,7 @@ func (x *GetEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEventsResponse.ProtoReflect.Descriptor instead.
 func (*GetEventsResponse) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{5}
+	return file_protos_event_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GetEventsResponse) GetStatus() *Status {
@@ -515,25 +515,24 @@ func (x *GetEventsResponse) GetEvents() []*Event {
 }
 
 type Submission struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	UserId           string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	CodeProblemId    string                 `protobuf:"bytes,3,opt,name=code_problem_id,json=codeProblemId,proto3" json:"code_problem_id,omitempty"`
-	LanguageId       string                 `protobuf:"bytes,4,opt,name=language_id,json=languageId,proto3" json:"language_id,omitempty"`
-	EventId          string                 `protobuf:"bytes,5,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	RoomId           string                 `protobuf:"bytes,6,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
-	CodeSubmitted    string                 `protobuf:"bytes,7,opt,name=code_submitted,json=codeSubmitted,proto3" json:"code_submitted,omitempty"`
-	Status           SubmissionStatus       `protobuf:"varint,8,opt,name=status,proto3,enum=event.SubmissionStatus" json:"status,omitempty"`
-	ExecutionTimeMs  int32                  `protobuf:"varint,9,opt,name=execution_time_ms,json=executionTimeMs,proto3" json:"execution_time_ms,omitempty"`
-	SubmittedAt      *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=submitted_at,json=submittedAt,proto3" json:"submitted_at,omitempty"`
-	SubmittedGuildId string                 `protobuf:"bytes,11,opt,name=submitted_guild_id,json=submittedGuildId,proto3" json:"submitted_guild_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	UserId          string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	CodeProblemId   string                 `protobuf:"bytes,3,opt,name=code_problem_id,json=codeProblemId,proto3" json:"code_problem_id,omitempty"`
+	LanguageId      string                 `protobuf:"bytes,4,opt,name=language_id,json=languageId,proto3" json:"language_id,omitempty"`
+	EventId         string                 `protobuf:"bytes,5,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	RoomId          string                 `protobuf:"bytes,6,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
+	CodeSubmitted   string                 `protobuf:"bytes,7,opt,name=code_submitted,json=codeSubmitted,proto3" json:"code_submitted,omitempty"`
+	Status          SubmissionStatus       `protobuf:"varint,8,opt,name=status,proto3,enum=event.SubmissionStatus" json:"status,omitempty"`
+	ExecutionTimeMs int32                  `protobuf:"varint,9,opt,name=execution_time_ms,json=executionTimeMs,proto3" json:"execution_time_ms,omitempty"`
+	SubmittedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=submitted_at,json=submittedAt,proto3" json:"submitted_at,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Submission) Reset() {
 	*x = Submission{}
-	mi := &file_event_proto_msgTypes[6]
+	mi := &file_protos_event_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -545,7 +544,7 @@ func (x *Submission) String() string {
 func (*Submission) ProtoMessage() {}
 
 func (x *Submission) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[6]
+	mi := &file_protos_event_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -558,7 +557,7 @@ func (x *Submission) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Submission.ProtoReflect.Descriptor instead.
 func (*Submission) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{6}
+	return file_protos_event_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Submission) GetId() string {
@@ -631,13 +630,6 @@ func (x *Submission) GetSubmittedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *Submission) GetSubmittedGuildId() string {
-	if x != nil {
-		return x.SubmittedGuildId
-	}
-	return ""
-}
-
 type Tag struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -648,7 +640,7 @@ type Tag struct {
 
 func (x *Tag) Reset() {
 	*x = Tag{}
-	mi := &file_event_proto_msgTypes[7]
+	mi := &file_protos_event_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -660,7 +652,7 @@ func (x *Tag) String() string {
 func (*Tag) ProtoMessage() {}
 
 func (x *Tag) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[7]
+	mi := &file_protos_event_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -673,7 +665,7 @@ func (x *Tag) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Tag.ProtoReflect.Descriptor instead.
 func (*Tag) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{7}
+	return file_protos_event_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Tag) GetId() string {
@@ -702,7 +694,7 @@ type CodeProblem struct {
 
 func (x *CodeProblem) Reset() {
 	*x = CodeProblem{}
-	mi := &file_event_proto_msgTypes[8]
+	mi := &file_protos_event_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -714,7 +706,7 @@ func (x *CodeProblem) String() string {
 func (*CodeProblem) ProtoMessage() {}
 
 func (x *CodeProblem) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[8]
+	mi := &file_protos_event_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -727,7 +719,7 @@ func (x *CodeProblem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodeProblem.ProtoReflect.Descriptor instead.
 func (*CodeProblem) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{8}
+	return file_protos_event_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CodeProblem) GetId() string {
@@ -759,21 +751,20 @@ func (x *CodeProblem) GetTags() []*Tag {
 }
 
 type SubmitCodeSolutionRequest struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	UserId           string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	CodeProblemId    string                 `protobuf:"bytes,2,opt,name=code_problem_id,json=codeProblemId,proto3" json:"code_problem_id,omitempty"`
-	LanguageId       string                 `protobuf:"bytes,3,opt,name=language_id,json=languageId,proto3" json:"language_id,omitempty"`
-	EventId          string                 `protobuf:"bytes,4,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	RoomId           string                 `protobuf:"bytes,5,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
-	CodeSubmitted    string                 `protobuf:"bytes,6,opt,name=code_submitted,json=codeSubmitted,proto3" json:"code_submitted,omitempty"`
-	SubmittedGuildId string                 `protobuf:"bytes,7,opt,name=submitted_guild_id,json=submittedGuildId,proto3" json:"submitted_guild_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	CodeProblemId string                 `protobuf:"bytes,2,opt,name=code_problem_id,json=codeProblemId,proto3" json:"code_problem_id,omitempty"`
+	LanguageId    string                 `protobuf:"bytes,3,opt,name=language_id,json=languageId,proto3" json:"language_id,omitempty"`
+	EventId       string                 `protobuf:"bytes,4,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	RoomId        string                 `protobuf:"bytes,5,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
+	CodeSubmitted string                 `protobuf:"bytes,6,opt,name=code_submitted,json=codeSubmitted,proto3" json:"code_submitted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SubmitCodeSolutionRequest) Reset() {
 	*x = SubmitCodeSolutionRequest{}
-	mi := &file_event_proto_msgTypes[9]
+	mi := &file_protos_event_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -785,7 +776,7 @@ func (x *SubmitCodeSolutionRequest) String() string {
 func (*SubmitCodeSolutionRequest) ProtoMessage() {}
 
 func (x *SubmitCodeSolutionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[9]
+	mi := &file_protos_event_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -798,7 +789,7 @@ func (x *SubmitCodeSolutionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitCodeSolutionRequest.ProtoReflect.Descriptor instead.
 func (*SubmitCodeSolutionRequest) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{9}
+	return file_protos_event_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *SubmitCodeSolutionRequest) GetUserId() string {
@@ -843,13 +834,6 @@ func (x *SubmitCodeSolutionRequest) GetCodeSubmitted() string {
 	return ""
 }
 
-func (x *SubmitCodeSolutionRequest) GetSubmittedGuildId() string {
-	if x != nil {
-		return x.SubmittedGuildId
-	}
-	return ""
-}
-
 type SubmitCodeSolutionResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Status        *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
@@ -860,7 +844,7 @@ type SubmitCodeSolutionResponse struct {
 
 func (x *SubmitCodeSolutionResponse) Reset() {
 	*x = SubmitCodeSolutionResponse{}
-	mi := &file_event_proto_msgTypes[10]
+	mi := &file_protos_event_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -872,7 +856,7 @@ func (x *SubmitCodeSolutionResponse) String() string {
 func (*SubmitCodeSolutionResponse) ProtoMessage() {}
 
 func (x *SubmitCodeSolutionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[10]
+	mi := &file_protos_event_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -885,7 +869,7 @@ func (x *SubmitCodeSolutionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitCodeSolutionResponse.ProtoReflect.Descriptor instead.
 func (*SubmitCodeSolutionResponse) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{10}
+	return file_protos_event_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *SubmitCodeSolutionResponse) GetStatus() *Status {
@@ -912,7 +896,7 @@ type GetUserSubmissionsRequest struct {
 
 func (x *GetUserSubmissionsRequest) Reset() {
 	*x = GetUserSubmissionsRequest{}
-	mi := &file_event_proto_msgTypes[11]
+	mi := &file_protos_event_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -924,7 +908,7 @@ func (x *GetUserSubmissionsRequest) String() string {
 func (*GetUserSubmissionsRequest) ProtoMessage() {}
 
 func (x *GetUserSubmissionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[11]
+	mi := &file_protos_event_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -937,7 +921,7 @@ func (x *GetUserSubmissionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserSubmissionsRequest.ProtoReflect.Descriptor instead.
 func (*GetUserSubmissionsRequest) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{11}
+	return file_protos_event_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GetUserSubmissionsRequest) GetUserId() string {
@@ -965,7 +949,7 @@ type GetUserSubmissionsResponse struct {
 
 func (x *GetUserSubmissionsResponse) Reset() {
 	*x = GetUserSubmissionsResponse{}
-	mi := &file_event_proto_msgTypes[12]
+	mi := &file_protos_event_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -977,7 +961,7 @@ func (x *GetUserSubmissionsResponse) String() string {
 func (*GetUserSubmissionsResponse) ProtoMessage() {}
 
 func (x *GetUserSubmissionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[12]
+	mi := &file_protos_event_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -990,7 +974,7 @@ func (x *GetUserSubmissionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserSubmissionsResponse.ProtoReflect.Descriptor instead.
 func (*GetUserSubmissionsResponse) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{12}
+	return file_protos_event_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GetUserSubmissionsResponse) GetStatus() *Status {
@@ -1026,7 +1010,7 @@ type GetCodeProblemCriteria struct {
 
 func (x *GetCodeProblemCriteria) Reset() {
 	*x = GetCodeProblemCriteria{}
-	mi := &file_event_proto_msgTypes[13]
+	mi := &file_protos_event_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1038,7 +1022,7 @@ func (x *GetCodeProblemCriteria) String() string {
 func (*GetCodeProblemCriteria) ProtoMessage() {}
 
 func (x *GetCodeProblemCriteria) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[13]
+	mi := &file_protos_event_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1051,7 +1035,7 @@ func (x *GetCodeProblemCriteria) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCodeProblemCriteria.ProtoReflect.Descriptor instead.
 func (*GetCodeProblemCriteria) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{13}
+	return file_protos_event_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetCodeProblemCriteria) GetPaginationRequest() *PaginationRequest {
@@ -1093,7 +1077,7 @@ type CodeProblemResponse struct {
 
 func (x *CodeProblemResponse) Reset() {
 	*x = CodeProblemResponse{}
-	mi := &file_event_proto_msgTypes[14]
+	mi := &file_protos_event_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1105,7 +1089,7 @@ func (x *CodeProblemResponse) String() string {
 func (*CodeProblemResponse) ProtoMessage() {}
 
 func (x *CodeProblemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_event_proto_msgTypes[14]
+	mi := &file_protos_event_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1118,7 +1102,7 @@ func (x *CodeProblemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodeProblemResponse.ProtoReflect.Descriptor instead.
 func (*CodeProblemResponse) Descriptor() ([]byte, []int) {
-	return file_event_proto_rawDescGZIP(), []int{14}
+	return file_protos_event_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *CodeProblemResponse) GetStatus() *Status {
@@ -1142,11 +1126,11 @@ func (x *CodeProblemResponse) GetCodeProblems() []*CodeProblem {
 	return nil
 }
 
-var File_event_proto protoreflect.FileDescriptor
+var File_protos_event_proto protoreflect.FileDescriptor
 
-const file_event_proto_rawDesc = "" +
+const file_protos_event_proto_rawDesc = "" +
 	"\n" +
-	"\vevent.proto\x12\x05event\x1a\x1fgoogle/protobuf/timestamp.proto\"O\n" +
+	"\x12protos/event.proto\x12\x05event\x1a\x1fgoogle/protobuf/timestamp.proto\"O\n" +
 	"\x11PaginationRequest\x12\x1b\n" +
 	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
@@ -1176,7 +1160,7 @@ const file_event_proto_rawDesc = "" +
 	"\x11GetEventsResponse\x12%\n" +
 	"\x06status\x18\x01 \x01(\v2\r.event.StatusR\x06status\x12D\n" +
 	"\x11pagination_result\x18\x02 \x01(\v2\x17.event.PaginationResultR\x10paginationResult\x12$\n" +
-	"\x06events\x18\x03 \x03(\v2\f.event.EventR\x06events\"\xa3\x03\n" +
+	"\x06events\x18\x03 \x03(\v2\f.event.EventR\x06events\"\xf5\x02\n" +
 	"\n" +
 	"Submission\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
@@ -1190,8 +1174,7 @@ const file_event_proto_rawDesc = "" +
 	"\x06status\x18\b \x01(\x0e2\x17.event.SubmissionStatusR\x06status\x12*\n" +
 	"\x11execution_time_ms\x18\t \x01(\x05R\x0fexecutionTimeMs\x12=\n" +
 	"\fsubmitted_at\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampR\vsubmittedAt\x12,\n" +
-	"\x12submitted_guild_id\x18\v \x01(\tR\x10submittedGuildId\")\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\vsubmittedAt\")\n" +
 	"\x03Tag\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"s\n" +
@@ -1202,7 +1185,7 @@ const file_event_proto_rawDesc = "" +
 	"difficulty\x18\x03 \x01(\x05R\n" +
 	"difficulty\x12\x1e\n" +
 	"\x04tags\x18\x04 \x03(\v2\n" +
-	".event.TagR\x04tags\"\x86\x02\n" +
+	".event.TagR\x04tags\"\xd8\x01\n" +
 	"\x19SubmitCodeSolutionRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12&\n" +
 	"\x0fcode_problem_id\x18\x02 \x01(\tR\rcodeProblemId\x12\x1f\n" +
@@ -1210,8 +1193,7 @@ const file_event_proto_rawDesc = "" +
 	"languageId\x12\x19\n" +
 	"\bevent_id\x18\x04 \x01(\tR\aeventId\x12\x17\n" +
 	"\aroom_id\x18\x05 \x01(\tR\x06roomId\x12%\n" +
-	"\x0ecode_submitted\x18\x06 \x01(\tR\rcodeSubmitted\x12,\n" +
-	"\x12submitted_guild_id\x18\a \x01(\tR\x10submittedGuildId\"v\n" +
+	"\x0ecode_submitted\x18\x06 \x01(\tR\rcodeSubmitted\"v\n" +
 	"\x1aSubmitCodeSolutionResponse\x12%\n" +
 	"\x06status\x18\x01 \x01(\v2\r.event.StatusR\x06status\x121\n" +
 	"\n" +
@@ -1257,20 +1239,20 @@ const file_event_proto_rawDesc = "" +
 	"\x0fGetCodeProblems\x12\x1d.event.GetCodeProblemCriteria\x1a\x1a.event.CodeProblemResponseB9Z7github.com/FA25SE050-RogueLearn/RogueLearn.Event/protosb\x06proto3"
 
 var (
-	file_event_proto_rawDescOnce sync.Once
-	file_event_proto_rawDescData []byte
+	file_protos_event_proto_rawDescOnce sync.Once
+	file_protos_event_proto_rawDescData []byte
 )
 
-func file_event_proto_rawDescGZIP() []byte {
-	file_event_proto_rawDescOnce.Do(func() {
-		file_event_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_event_proto_rawDesc), len(file_event_proto_rawDesc)))
+func file_protos_event_proto_rawDescGZIP() []byte {
+	file_protos_event_proto_rawDescOnce.Do(func() {
+		file_protos_event_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_protos_event_proto_rawDesc), len(file_protos_event_proto_rawDesc)))
 	})
-	return file_event_proto_rawDescData
+	return file_protos_event_proto_rawDescData
 }
 
-var file_event_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_event_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
-var file_event_proto_goTypes = []any{
+var file_protos_event_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_protos_event_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_protos_event_proto_goTypes = []any{
 	(EventType)(0),                     // 0: event.EventType
 	(SubmissionStatus)(0),              // 1: event.SubmissionStatus
 	(*PaginationRequest)(nil),          // 2: event.PaginationRequest
@@ -1290,7 +1272,7 @@ var file_event_proto_goTypes = []any{
 	(*CodeProblemResponse)(nil),        // 16: event.CodeProblemResponse
 	(*timestamppb.Timestamp)(nil),      // 17: google.protobuf.Timestamp
 }
-var file_event_proto_depIdxs = []int32{
+var file_protos_event_proto_depIdxs = []int32{
 	0,  // 0: event.Event.type:type_name -> event.EventType
 	17, // 1: event.Event.start_date:type_name -> google.protobuf.Timestamp
 	17, // 2: event.Event.end_date:type_name -> google.protobuf.Timestamp
@@ -1326,27 +1308,27 @@ var file_event_proto_depIdxs = []int32{
 	0,  // [0:20] is the sub-list for field type_name
 }
 
-func init() { file_event_proto_init() }
-func file_event_proto_init() {
-	if File_event_proto != nil {
+func init() { file_protos_event_proto_init() }
+func file_protos_event_proto_init() {
+	if File_protos_event_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_event_proto_rawDesc), len(file_event_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protos_event_proto_rawDesc), len(file_protos_event_proto_rawDesc)),
 			NumEnums:      2,
 			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_event_proto_goTypes,
-		DependencyIndexes: file_event_proto_depIdxs,
-		EnumInfos:         file_event_proto_enumTypes,
-		MessageInfos:      file_event_proto_msgTypes,
+		GoTypes:           file_protos_event_proto_goTypes,
+		DependencyIndexes: file_protos_event_proto_depIdxs,
+		EnumInfos:         file_protos_event_proto_enumTypes,
+		MessageInfos:      file_protos_event_proto_msgTypes,
 	}.Build()
-	File_event_proto = out.File
-	file_event_proto_goTypes = nil
-	file_event_proto_depIdxs = nil
+	File_protos_event_proto = out.File
+	file_protos_event_proto_goTypes = nil
+	file_protos_event_proto_depIdxs = nil
 }

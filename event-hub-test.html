@@ -608,9 +608,18 @@
                 </button>
 
                 <!-- Submission Result Display -->
-                <div id="submissionResult" class="submission-result" style="margin-top: 20px; display: none;">
-                    <h3 style="margin-bottom: 10px; color: #667eea;">Submission Result</h3>
-                    <div id="submissionResultContent" style="padding: 15px; border-radius: 8px;"></div>
+                <div
+                    id="submissionResult"
+                    class="submission-result"
+                    style="margin-top: 20px; display: none"
+                >
+                    <h3 style="margin-bottom: 10px; color: #667eea">
+                        Submission Result
+                    </h3>
+                    <div
+                        id="submissionResultContent"
+                        style="padding: 15px; border-radius: 8px"
+                    ></div>
                 </div>
             </div>
 
@@ -973,7 +982,9 @@
             // Display submission result
             function displaySubmissionResult(result, isCorrect) {
                 const resultDiv = document.getElementById("submissionResult");
-                const contentDiv = document.getElementById("submissionResultContent");
+                const contentDiv = document.getElementById(
+                    "submissionResultContent",
+                );
 
                 resultDiv.style.display = "block";
 
@@ -988,7 +999,7 @@
                                 <p style="margin: 5px 0 0 0; color: #155724;">
                                     ${result.Message || result.message || "Your solution is correct!"}
                                 </p>
-                                ${result.Score || result.score ? `<p style="margin: 5px 0 0 0; color: #155724;"><strong>Score: +${result.Score || result.score} points</strong></p>` : ''}
+                                ${result.Score || result.score ? `<p style="margin: 5px 0 0 0; color: #155724;"><strong>Score: +${result.Score || result.score} points</strong></p>` : ""}
                             </div>
                         </div>
                     `;
@@ -997,16 +1008,28 @@
                     contentDiv.style.border = "2px solid #dc3545";
 
                     const status = result.Status || result.status || "Error";
-                    const message = result.Message || result.message || "Your solution has errors.";
+                    const message =
+                        result.Message ||
+                        result.message ||
+                        "Your solution has errors.";
 
                     let statusEmoji = "❌";
                     let statusColor = "#721c24";
 
-                    if (status === "Compilation Error" || status === "CompilationError") {
+                    if (
+                        status === "Compilation Error" ||
+                        status === "CompilationError"
+                    ) {
                         statusEmoji = "🔧";
-                    } else if (status === "Runtime Error" || status === "RuntimeError") {
+                    } else if (
+                        status === "Runtime Error" ||
+                        status === "RuntimeError"
+                    ) {
                         statusEmoji = "⚠️";
-                    } else if (status === "Wrong Answer" || status === "WrongAnswer") {
+                    } else if (
+                        status === "Wrong Answer" ||
+                        status === "WrongAnswer"
+                    ) {
                         statusEmoji = "❌";
                     }
 
@@ -1106,6 +1129,7 @@
                 const eventId = document.getElementById("eventId").value;
                 const roomSelect = document.getElementById("roomId");
                 const fetchBtn = document.getElementById("fetchRoomsBtn");
+                const token = document.getElementById("bearerToken").value;
 
                 if (!eventId) {
                     alert("Please enter an Event ID.");
@@ -1119,7 +1143,7 @@
                 try {
                     // This endpoint is public, so no auth needed
                     const response = await fetch(
-                        `${apiUrl}/events/${eventId}/rooms`,
+                        `${apiUrl}/events/${eventId}/rooms?auth_token=${token}`,
                     );
                     const result = await response.json();
 
@@ -1183,6 +1207,9 @@
 
                 // No need for connected_player_id - extracted from token on server
                 let url = `${apiUrl}/events/${eventId}/rooms/${roomId}/sse?auth_token=${encodeURIComponent(token)}`;
+                console.log(
+                    `Connecting to: ${url.split("?")[0]}?auth_token=${token}`,
+                );
 
                 addLog(
                     "roomLog",
@@ -1285,12 +1312,15 @@
                         console.log("Wrong solution data:", data);
                         addLog(
                             "roomLog",
-                            `❌ Wrong solution: ${data.Status || data.status || 'Error'}`,
+                            `❌ Wrong solution: ${data.Status || data.status || "Error"}`,
                             "error",
                         );
 
                         // If data is just a string, convert it to an object
-                        const resultObj = typeof data === 'string' ? { Status: 'Error', Message: data } : data;
+                        const resultObj =
+                            typeof data === "string"
+                                ? { Status: "Error", Message: data }
+                                : data;
                         displaySubmissionResult(resultObj, false);
                     },
                 );
@@ -1420,7 +1450,12 @@
 
             // Leaderboard updates
             function updateRoomLeaderboard(data) {
-                console.log("Leaderboard data received:", data, "Type:", typeof data);
+                console.log(
+                    "Leaderboard data received:",
+                    data,
+                    "Type:",
+                    typeof data,
+                );
                 const tbody = document.getElementById("roomLeaderboardBody");
                 tbody.innerHTML = "";
 
@@ -1428,11 +1463,20 @@
                 let leaderboardArray = data;
                 if (data && !Array.isArray(data)) {
                     // Try common nested structures (both lowercase and uppercase)
-                    leaderboardArray = data.Data || data.data || data.leaderboard || data.entries || [];
+                    leaderboardArray =
+                        data.Data ||
+                        data.data ||
+                        data.leaderboard ||
+                        data.entries ||
+                        [];
                     console.log("Extracted array:", leaderboardArray);
                 }
 
-                if (!leaderboardArray || !Array.isArray(leaderboardArray) || leaderboardArray.length === 0) {
+                if (
+                    !leaderboardArray ||
+                    !Array.isArray(leaderboardArray) ||
+                    leaderboardArray.length === 0
+                ) {
                     tbody.innerHTML =
                         '<tr><td colspan="3" style="text-align: center; color: #999;">No data</td></tr>';
                     return;
@@ -1452,7 +1496,12 @@
 
                     // Handle both lowercase and uppercase field names
                     const place = entry.place || entry.Place || index + 1;
-                    const playerName = entry.player_name || entry.PlayerName || entry.username || entry.Username || 'Unknown';
+                    const playerName =
+                        entry.player_name ||
+                        entry.PlayerName ||
+                        entry.username ||
+                        entry.Username ||
+                        "Unknown";
                     const score = entry.score || entry.Score || 0;
 
                     tr.innerHTML = `
@@ -1473,10 +1522,19 @@
                 let leaderboardArray = data;
                 if (data && !Array.isArray(data)) {
                     // Try common nested structures (both lowercase and uppercase)
-                    leaderboardArray = data.Data || data.data || data.leaderboard || data.entries || [];
+                    leaderboardArray =
+                        data.Data ||
+                        data.data ||
+                        data.leaderboard ||
+                        data.entries ||
+                        [];
                 }
 
-                if (!leaderboardArray || !Array.isArray(leaderboardArray) || leaderboardArray.length === 0) {
+                if (
+                    !leaderboardArray ||
+                    !Array.isArray(leaderboardArray) ||
+                    leaderboardArray.length === 0
+                ) {
                     tbody.innerHTML =
                         '<tr><td colspan="3" style="text-align: center; color: #999;">No data</td></tr>';
                     return;
@@ -1495,8 +1553,18 @@
                     tr.className = rankClass;
 
                     const rank = entry.rank || entry.Rank || index + 1;
-                    const guildName = entry.guild_name || entry.GuildName || entry.name || entry.Name || 'Unknown';
-                    const totalScore = entry.total_score || entry.TotalScore || entry.score || entry.Score || 0;
+                    const guildName =
+                        entry.guild_name ||
+                        entry.GuildName ||
+                        entry.name ||
+                        entry.Name ||
+                        "Unknown";
+                    const totalScore =
+                        entry.total_score ||
+                        entry.TotalScore ||
+                        entry.score ||
+                        entry.Score ||
+                        0;
 
                     tr.innerHTML = `
                     <td>${rank}</td>

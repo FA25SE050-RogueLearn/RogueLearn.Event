@@ -36,9 +36,12 @@ func main() {
 		log.Printf("Development mode: loaded .env file")
 	}
 
+	httpPort := env.GetInt("EVENT_HTTP_PORT", 8084)
+	gRPCPort := env.GetInt("EVENT_GRPC_PORT", 8085)
+
 	cfg := &api.Config{
-		HttpPort: 8084,
-		GrpcPort: 8085,
+		HttpPort: httpPort,
+		GrpcPort: gRPCPort,
 	}
 
 	connStr := env.GetString("EVENT_SUPABASE_DB_CONNSTR", "")
