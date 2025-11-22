@@ -8,14 +8,19 @@ import (
 	"time"
 
 	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/events"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/store"
+	pb "github.com/FA25SE050-RogueLearn/RogueLearn.Event/protos"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
 var (
-	ErrEventNotFound   = errors.New("Event not found.")
-	ErrEventNotStarted = errors.New("Event hasn't started yet.")
+	ErrEventNotFound          = errors.New("Event not found.")
+	ErrEventNotStarted        = errors.New("Event hasn't started yet.")
+	ErrPlayerNotInGuild       = errors.New("Player is not in any Guild.")
+	ErrGuildNotAssignedToRoom = errors.New("Guild is not assigned to this room.")
+	ErrEventEnded             = errors.New("Event has ended.")
 )
 
 // SSE Event Handler for room's leaderboard
@@ -50,7 +55,7 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	event, err := hr.queries.GetEventByID(r.Context(), toPgtypeUUID(eventID))
-	if err != pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		hr.logger.Debug("Event not found")
 		hr.notFound(w, r)
 		return
@@ -60,11 +65,78 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// event start time and end time validation
 	if time.Now().UTC().Before(event.StartedDate.Time.UTC()) {
 		hr.logger.Debug("Event hasn't started yet")
 		hr.badRequest(w, r, ErrEventNotStarted)
 		return
 	}
+
+	// event end time validation
+	if time.Now().UTC().After(event.EndDate.Time.UTC()) {
+		hr.logger.Debug("Event has ended")
+		hr.badRequest(w, r, ErrEventEnded)
+		return
+	}
+
+	// check if player has permission to join this room
+	// First, get the user's guild via gRPC
+	userProfile, err := hr.userClient.GetUserProfileByAuthId(r.Context(), &pb.GetUserProfileByAuthIdRequest{
+		AuthUserId: userID.String(),
+	})
+	if err != nil {
+		hr.logger.Error("failed to get user profile", "user_id", userID, "error", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	guild, err := hr.userClient.GetMyGuild(r.Context(), &pb.GetMyGuildRequest{
+		AuthUserId: userProfile.AuthUserId,
+	})
+	if err != nil {
+		hr.logger.Error("failed to get user guild", "user_id", userID, "error", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	if guild == nil {
+		hr.logger.Warn("user not in a guild", "user_id", userID)
+		hr.badRequest(w, r, ErrPlayerNotInGuild)
+		return
+	}
+
+	guildID, err := uuid.Parse(guild.Id)
+	if err != nil {
+		hr.logger.Error("invalid guild_id format", "guild_id", guild.Id, "error", err)
+		http.Error(w, "invalid guild ID", http.StatusInternalServerError)
+		return
+	}
+
+	// Validate that the user's guild is assigned to this room
+	_, err = hr.queries.ValidateGuildRoomAssignment(r.Context(), store.ValidateGuildRoomAssignmentParams{
+		EventID: toPgtypeUUID(eventID),
+		GuildID: toPgtypeUUID(guildID),
+		RoomID:  toPgtypeUUID(roomID),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		hr.logger.Warn("guild not assigned to room",
+			"user_id", userID,
+			"guild_id", guildID,
+			"room_id", roomID,
+			"event_id", eventID)
+		hr.badRequest(w, r, ErrGuildNotAssignedToRoom)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to validate guild room assignment", "error", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	hr.logger.Info("guild room assignment validated",
+		"user_id", userID,
+		"guild_id", guildID,
+		"room_id", roomID,
+		"event_id", eventID)
 
 	// Set http headers required for SSE
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -107,7 +179,14 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	hr.logger.Info("SSE connection established", "userID", userID, "room_id", roomID)
 
 	// player joined event - time remaining will be sent after successful join
-	roomHub.Events <- events.PlayerJoined{PlayerID: userID, RoomID: roomID, EventID: eventID}
+	roomHub.Events <- events.PlayerJoined{
+		PlayerID:      userID,
+		RoomID:        roomID,
+		EventID:       eventID,
+		PlayerName:    userProfile.Username,
+		PlayerGuildID: guildID,
+		EventEndTime:  event.EndDate.Time,
+	}
 
 	for {
 		select {

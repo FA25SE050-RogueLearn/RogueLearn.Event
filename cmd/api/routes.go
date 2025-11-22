@@ -39,9 +39,11 @@ func (app *Application) routes() http.Handler {
 			r.Get("/{event_id}/rooms", app.handlers.GetEventRoomsHandler)
 			r.Post("/{event_id}/guilds/{guild_id}/register", app.handlers.RegisterGuildToEventHandler)
 			r.Get("/{event_id}/problems", app.handlers.GetEventProblemsHandler)
+			r.Get("/{event_id}/leaderboards", app.handlers.GetEventLeaderboardHandler)
 			r.Get("/{event_id}/sse", app.handlers.SpectateEventHandler)
 			r.Get("/{event_id}/rooms/{room_id}/sse", app.handlers.JoinRoomHandler)
 			r.Post("/{event_id}/rooms/{room_id}/submit", app.handlers.SubmitInRoomHandler)
+
 		})
 	})
 

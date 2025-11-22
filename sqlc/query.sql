@@ -918,3 +918,12 @@ SELECT
   ps.highest_score::integer,
   (SELECT COUNT(*) FROM event_rooms)::integer as total_rooms
 FROM player_stats ps, submission_stats ss;
+
+-- name: ValidateGuildRoomAssignment :one
+-- Verify that a guild is assigned to a specific room for an event
+-- Returns the guild_id if the assignment is valid, error otherwise
+SELECT egp.guild_id
+FROM event_guild_participants egp
+WHERE egp.event_id = $1
+  AND egp.guild_id = $2
+  AND egp.room_id = $3;

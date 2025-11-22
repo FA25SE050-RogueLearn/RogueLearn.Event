@@ -63,9 +63,12 @@ type LeaderboardUpdated struct {
 }
 
 type PlayerJoined struct {
-	PlayerID uuid.UUID
-	RoomID   uuid.UUID
-	EventID  uuid.UUID
+	PlayerID      uuid.UUID
+	PlayerName    string
+	PlayerGuildID uuid.UUID
+	RoomID        uuid.UUID
+	EventID       uuid.UUID
+	EventEndTime  time.Time
 }
 
 type PlayerLeft struct {

@@ -4004,3 +4004,26 @@ func (q *Queries) UpdateTestCase(ctx context.Context, arg UpdateTestCaseParams) 
 	)
 	return i, err
 }
+
+const validateGuildRoomAssignment = `-- name: ValidateGuildRoomAssignment :one
+SELECT egp.guild_id
+FROM event_guild_participants egp
+WHERE egp.event_id = $1
+  AND egp.guild_id = $2
+  AND egp.room_id = $3
+`
+
+type ValidateGuildRoomAssignmentParams struct {
+	EventID pgtype.UUID
+	GuildID pgtype.UUID
+	RoomID  pgtype.UUID
+}
+
+// Verify that a guild is assigned to a specific room for an event
+// Returns the guild_id if the assignment is valid, error otherwise
+func (q *Queries) ValidateGuildRoomAssignment(ctx context.Context, arg ValidateGuildRoomAssignmentParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, validateGuildRoomAssignment, arg.EventID, arg.GuildID, arg.RoomID)
+	var guild_id pgtype.UUID
+	err := row.Scan(&guild_id)
+	return guild_id, err
+}

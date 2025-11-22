@@ -444,46 +444,6 @@ func (e *EventHub) buildEventExpiredMessage(ctx context.Context, eventID uuid.UU
 			"count", len(eventExpired.TopGuilds))
 	}
 
-	// Fetch event statistics
-	stats, err := e.queries.GetEventStatistics(ctx, toPgtypeUUID(eventID))
-	if err != nil {
-		e.logger.Warn("Failed to fetch event statistics for expiry message",
-			"event_id", eventID,
-			"error", err)
-		// Use default/empty statistics
-		eventExpired.Statistics = events.EventStatistics{}
-	} else {
-		// Convert pgtype.Numeric to float64 for average score
-		avgScore := 0.0
-		if stats.AverageScore.Valid {
-			f8, err := stats.AverageScore.Float64Value()
-			if err == nil {
-				avgScore = f8.Float64
-			}
-		}
-
-		// Calculate acceptance rate as percentage
-		acceptanceRate := 0.0
-		if stats.SsTotalSubmissions > 0 {
-			acceptanceRate = float64(stats.SsAcceptedSubmissions) / float64(stats.SsTotalSubmissions) * 100
-		}
-
-		eventExpired.Statistics = events.EventStatistics{
-			TotalParticipants:   int(stats.PsTotalParticipants),
-			TotalSubmissions:    int(stats.SsTotalSubmissions),
-			AcceptedSubmissions: int(stats.SsAcceptedSubmissions),
-			AcceptanceRate:      acceptanceRate,
-			AverageScore:        avgScore,
-			HighestScore:        int(stats.PsHighestScore),
-			TotalRooms:          int(stats.TotalRooms),
-		}
-		e.logger.Info("Added event statistics to expiry message",
-			"event_id", eventID,
-			"total_participants", stats.PsTotalParticipants,
-			"total_submissions", stats.SsTotalSubmissions,
-			"acceptance_rate", acceptanceRate)
-	}
-
 	// Enhance message with winner information
 	if len(eventExpired.TopPlayers) > 0 {
 		winner := eventExpired.TopPlayers[0]
@@ -1741,15 +1701,7 @@ func (r *RoomHub) playerInRoom(ctx context.Context, roomID, playerID uuid.UUID) 
 }
 
 // Helper method to add player to room
-func (r *RoomHub) addPlayerToRoom(ctx context.Context, roomID, playerID uuid.UUID, playerName, guildIDStr string) error {
-	guildID, err := uuid.Parse(guildIDStr)
-	if err != nil {
-		r.logger.Error("failed to parse guild_id",
-			"err", err,
-			"guild_id_str", guildID)
-		return err
-	}
-
+func (r *RoomHub) addPlayerToRoom(ctx context.Context, guildID, roomID, playerID uuid.UUID, playerName string) error {
 	createParams := store.CreateRoomPlayerParams{
 		RoomID:   toPgtypeUUID(roomID),
 		UserID:   toPgtypeUUID(playerID),
@@ -1758,7 +1710,7 @@ func (r *RoomHub) addPlayerToRoom(ctx context.Context, roomID, playerID uuid.UUI
 		GuildID:  toPgtypeUUID(guildID),
 	}
 
-	_, err = r.queries.CreateRoomPlayer(ctx, createParams)
+	_, err := r.queries.CreateRoomPlayer(ctx, createParams)
 	return err
 }
 
@@ -1863,21 +1815,6 @@ func (r *RoomHub) getRoomLeaderboardEntries(ctx context.Context) ([]RoomLeaderbo
 func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 	ctx := context.Background()
 
-	eventDetails, err := r.queries.GetEventByID(ctx, toPgtypeUUID(event.EventID))
-	if err != nil {
-		r.logger.Error("Failed to get event details", "event_id", event.EventID, "error", err)
-		return err
-	}
-
-	if eventDetails.EndDate.Time.UTC().Before(time.Now().UTC()) {
-		sseEvent := events.SseEvent{
-			EventType: events.EVENT_ENDED,
-		}
-
-		r.dispatchEventToPlayer(sseEvent, event.PlayerID)
-		return err
-	}
-
 	p, err := r.queries.GetRoomPlayer(ctx, store.GetRoomPlayerParams{
 		RoomID: toPgtypeUUID(event.RoomID),
 		UserID: toPgtypeUUID(event.PlayerID),
@@ -1888,29 +1825,7 @@ func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 		rand := rand.New(s)
 		fmt.Println(rand.IntN(100))
 
-		userProfile, err := r.userClient.GetUserProfileByAuthId(ctx, &pb.GetUserProfileByAuthIdRequest{
-			AuthUserId: event.PlayerID.String(),
-		})
-		if err != nil {
-			r.logger.Error("Failed to get player username", "player_id", event.PlayerID, "error", err)
-		} else {
-			r.logger.Info("retrieved user profile successfully", "player_id", event.PlayerID, "username", userProfile.Username)
-		}
-
-		guild, err := r.userClient.GetMyGuild(ctx, &pb.GetMyGuildRequest{
-			AuthUserId: userProfile.AuthUserId,
-		})
-		if err != nil {
-			r.logger.Error("Failed to get player guild", "player_id", event.PlayerID, "error", err)
-			return err
-		}
-		if guild == nil {
-			r.logger.Info("player is not in a guild", "player_id", event.PlayerID)
-			return ErrPlayerNotInGuild
-		}
-		r.logger.Info("retrieved user guild successfully", "player_id", event.PlayerID, "guild_id", guild.Id)
-
-		if err := r.addPlayerToRoom(ctx, event.RoomID, event.PlayerID, userProfile.Username, guild.Id); err != nil {
+		if err := r.addPlayerToRoom(ctx, event.PlayerGuildID, event.RoomID, event.PlayerID, event.PlayerName); err != nil {
 			r.logger.Error("Failed to add player to room", "room_id", event.RoomID, "player_id", event.PlayerID, "error", err)
 			return err
 		}
@@ -1957,11 +1872,11 @@ func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 
 	// Send time remaining to the player who just joined
 	// This is only sent on successful join
-	remaining := eventDetails.EndDate.Time.UTC().Sub(time.Now().UTC())
+	remaining := event.EventEndTime.UTC().Sub(time.Now().UTC())
 	if remaining > 0 {
 		initialTime := map[string]any{
 			"event_id":       event.EventID.String(),
-			"end_date":       eventDetails.EndDate.Time.Format(time.RFC3339),
+			"end_date":       event.EventEndTime.Format(time.RFC3339),
 			"seconds_left":   int64(remaining.Seconds()),
 			"formatted_time": formatDuration(remaining),
 			"server_time":    time.Now().Format(time.RFC3339),
