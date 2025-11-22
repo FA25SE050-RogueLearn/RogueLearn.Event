@@ -86,13 +86,25 @@ func main() {
 	if userURL == "" {
 		print("EVENT_USER_URL environment variable is not set")
 		panic("EVENT_USER_URL environment variable is not set")
+	} else {
+		fmt.Println("User URL:", userURL)
 	}
+
 	userClient, err := user.NewClient(userURL)
 	if err != nil {
 		print("Could not connect to User", userURL)
 		panic(fmt.Sprintf("Could not connect to User Service: %v", err))
 	}
 	defer userClient.Close()
+	profile, err := userClient.GetUserProfileByAuthId(context.Background(), &protos.GetUserProfileByAuthIdRequest{
+		AuthUserId: "335e0aa6-e538-45b6-bc7e-f725f1e2eddf",
+	})
+	if err != nil {
+		print("Could not get user profile")
+		panic(fmt.Sprintf("Could not get user profile: %v", err))
+	} else {
+		fmt.Println("User profile:", profile)
+	}
 
 	// Create a context for background goroutines
 	ctx := context.Background()

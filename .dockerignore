@@ -3,3 +3,4 @@
 *.sh
 *.out
 .env
+bin

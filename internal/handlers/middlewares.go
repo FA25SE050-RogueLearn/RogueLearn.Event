@@ -122,7 +122,8 @@ func (hr *HandlerRepo) RequireRole(role string) func(http.Handler) http.Handler 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !HasRole(r.Context(), role) {
-				hr.logger.Warn("User does not have required role", "required_role", role)
+				hr.logger.Warn("User does not have required role",
+					"required_role", role)
 				hr.forbidden(w, r)
 				return
 			}
@@ -150,4 +151,8 @@ func (hr *HandlerRepo) RequireAnyRole(roles ...string) func(http.Handler) http.H
 // This matches the roguelearn.user service's AdminOnly attribute
 func (hr *HandlerRepo) AdminOnly(next http.Handler) http.Handler {
 	return hr.RequireRole("Game Master")(next)
+}
+
+func (hr *HandlerRepo) GuildMasterOnly(next http.Handler) http.Handler {
+	return hr.RequireRole("Guild Master")(next)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -33,11 +34,15 @@ const (
 	AchievementCodeBattleParticipant = "code_battle_participant"
 )
 
-var AchievementCodeBattle map[int]string = map[int]string{
-	1: AchievementCodeBattleTop1,
-	2: AchievementCodeBattleTop2,
-	3: AchievementCodeBattleTop3,
-}
+var (
+	AchievementCodeBattle map[int]string = map[int]string{
+		1: AchievementCodeBattleTop1,
+		2: AchievementCodeBattleTop2,
+		3: AchievementCodeBattleTop3,
+	}
+
+	ErrPlayerNotInGuild = errors.New("player not in guild")
+)
 
 // event-based
 // each room will have a room manager, acting as a broadcaster for room-related events to all connected clients
@@ -341,7 +346,7 @@ func (e *EventHub) completeEventTransaction(ctx context.Context, eventID uuid.UU
 	// granting using grpc
 	// TODO: Refactor later
 	for i, member := range winningMembers {
-		e.userClient.GrantAchievements(ctx,
+		resp, err := e.userClient.GrantAchievements(ctx,
 			&pb.GrantAchievementsRequest{
 				UserAchievements: []*pb.UserAchievementGrant{
 					&pb.UserAchievementGrant{
@@ -350,6 +355,14 @@ func (e *EventHub) completeEventTransaction(ctx context.Context, eventID uuid.UU
 					},
 				},
 			})
+		if err != nil {
+			e.logger.Error("Failed to grant achievement to top 3 players",
+				"event_id", eventID,
+				"error", err,
+				"action", "continuing - top 3 players are optional")
+			return false
+		}
+		e.logger.Debug("Achievement granted.", *resp)
 	}
 
 	// Step 5: Commit the transaction (all-or-nothing)
@@ -962,18 +975,6 @@ func (h *EventHub) GetOrCreateRoomHub(ctx context.Context, roomID uuid.UUID) *Ro
 	go newRoomHub.Start()
 
 	h.logger.Info("Successfully created and started RoomHub", "room_id", roomID)
-
-	// Schedule event expiry timer if event is active (lazy-loading recovery)
-	// This ensures that if a room is lazy-loaded on a new instance,
-	// the expiry timer is still scheduled correctly
-	event, err := h.queries.GetEventByID(ctx, pgtype.UUID{Bytes: eventID, Valid: true})
-	if err == nil && event.Status == "active" {
-		h.logger.Info("Lazy-loaded room for active event, scheduling expiry timer",
-			"room_id", roomID,
-			"event_id", eventID,
-			"end_date", event.EndDate.Time)
-		h.ScheduleEventExpiry(eventID, event.EndDate.Time)
-	}
 
 	return newRoomHub
 }
@@ -1740,15 +1741,24 @@ func (r *RoomHub) playerInRoom(ctx context.Context, roomID, playerID uuid.UUID) 
 }
 
 // Helper method to add player to room
-func (r *RoomHub) addPlayerToRoom(ctx context.Context, roomID, playerID uuid.UUID, playerName, guildID string) error {
+func (r *RoomHub) addPlayerToRoom(ctx context.Context, roomID, playerID uuid.UUID, playerName, guildIDStr string) error {
+	guildID, err := uuid.Parse(guildIDStr)
+	if err != nil {
+		r.logger.Error("failed to parse guild_id",
+			"err", err,
+			"guild_id_str", guildID)
+		return err
+	}
+
 	createParams := store.CreateRoomPlayerParams{
 		RoomID:   toPgtypeUUID(roomID),
 		UserID:   toPgtypeUUID(playerID),
 		Username: playerName,
 		State:    store.RoomPlayerStatePresent,
+		GuildID:  toPgtypeUUID(guildID),
 	}
 
-	_, err := r.queries.CreateRoomPlayer(ctx, createParams)
+	_, err = r.queries.CreateRoomPlayer(ctx, createParams)
 	return err
 }
 
@@ -1892,9 +1902,13 @@ func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 		})
 		if err != nil {
 			r.logger.Error("Failed to get player guild", "player_id", event.PlayerID, "error", err)
-		} else {
-			r.logger.Info("retrieved user guild successfully", "player_id", event.PlayerID, "guild_id", guild.Id)
+			return err
 		}
+		if guild == nil {
+			r.logger.Info("player is not in a guild", "player_id", event.PlayerID)
+			return ErrPlayerNotInGuild
+		}
+		r.logger.Info("retrieved user guild successfully", "player_id", event.PlayerID, "guild_id", guild.Id)
 
 		if err := r.addPlayerToRoom(ctx, event.RoomID, event.PlayerID, userProfile.Username, guild.Id); err != nil {
 			r.logger.Error("Failed to add player to room", "room_id", event.RoomID, "player_id", event.PlayerID, "error", err)

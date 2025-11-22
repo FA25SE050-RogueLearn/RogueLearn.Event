@@ -30,6 +30,7 @@ type HandlerRepo struct {
 	jwtParser      *jwt.JWTParser
 	rabbitClient   *rabbitmq.RabbitMQClient
 	executorClient *executor.Client
+	userClient     *user.Client
 }
 
 // NewHandlerRepo creates a new HandlerRepo with the provided dependencies.
@@ -62,13 +63,13 @@ func NewHandlerRepo(ctx context.Context, logger *slog.Logger, db *pgxpool.Pool, 
 	go eventHub.StartInactiveRoomCleanup(ctx, 5*time.Minute, 30*time.Minute)
 
 	return &HandlerRepo{
-		logger:         logger,
-		db:             db,
-		queries:        queries,
-		jwtParser:      jwt.NewJWTParser(secKey, issuer, audience, logger),
-		eventHub:       eventHub,
-		rabbitClient:   rabbitClient,
-		executorClient: executorClient,
+		logger:       logger,
+		db:           db,
+		queries:      queries,
+		jwtParser:    jwt.NewJWTParser(secKey, issuer, audience, logger),
+		eventHub:     eventHub,
+		rabbitClient: rabbitClient,
+		userClient:   userClient,
 	}
 }
 

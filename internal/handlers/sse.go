@@ -10,6 +10,12 @@ import (
 	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/events"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+var (
+	ErrEventNotFound   = errors.New("Event not found.")
+	ErrEventNotStarted = errors.New("Event hasn't started yet.")
 )
 
 // SSE Event Handler for room's leaderboard
@@ -40,6 +46,23 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	eventID, roomID, err := getRequestEventIDAndRoomID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	event, err := hr.queries.GetEventByID(r.Context(), toPgtypeUUID(eventID))
+	if err != pgx.ErrNoRows {
+		hr.logger.Debug("Event not found")
+		hr.notFound(w, r)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to get event")
+		hr.serverError(w, r, err)
+		return
+	}
+
+	if time.Now().UTC().Before(event.StartedDate.Time.UTC()) {
+		hr.logger.Debug("Event hasn't started yet")
+		hr.badRequest(w, r, ErrEventNotStarted)
 		return
 	}
 

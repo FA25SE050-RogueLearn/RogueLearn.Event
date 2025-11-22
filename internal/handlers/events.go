@@ -11,6 +11,7 @@ import (
 	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/store"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/request"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/response"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/protos"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -160,7 +161,6 @@ func (hr *HandlerRepo) GetEventsHandler(w http.ResponseWriter, r *http.Request) 
 }
 
 type EventCreationRequest struct {
-	RequesterGuildID  string               `json:"requester_guild_id"`
 	EventType         string               `json:"event_type"`
 	Title             string               `json:"title"`
 	Description       string               `json:"description"`
@@ -226,11 +226,31 @@ func (hr *HandlerRepo) CreateEventHandler(w http.ResponseWriter, r *http.Request
 		hr.badRequest(w, r, errors.New("start date must be before end date"))
 		return
 	}
-	requesterGuildID, err := uuid.Parse(req.RequesterGuildID)
+	// get guild_id by grpc
+	userClaims, err := GetUserClaims(r.Context())
 	if err != nil {
-		hr.badRequest(w, r, errors.New("invalid requester guild ID format"))
+		hr.logger.Debug("Invalid claims", "err", err)
+		hr.unauthorized(w, r)
 		return
 	}
+
+	requesterGuild, err := hr.userClient.GetMyGuild(r.Context(), &protos.GetMyGuildRequest{
+		AuthUserId: userClaims.Sub,
+	})
+	if err != nil {
+		hr.logger.Error("failed to get requester guild_id", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	requesterGuildID, err := uuid.Parse(requesterGuild.Id)
+	if err != nil {
+		hr.logger.Error("failed to parse requester guild_id", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	hr.logger.Debug("request_guild_id parsed", "requester_guild_id", requesterGuildID.String())
 
 	// Marshal JSONB fields
 	participationDetailsJSON, err := json.Marshal(req.Participation)

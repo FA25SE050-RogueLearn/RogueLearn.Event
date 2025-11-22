@@ -54,7 +54,7 @@ WITH latest_snapshot_time AS (
 ranked_entries AS (
   SELECT
     id,
-    RANK() OVER (ORDER BY total_score DESC) as new_rank
+    DENSE_RANK() OVER (ORDER BY total_score DESC) as new_rank
   FROM guild_leaderboard_entries gle2
   WHERE gle2.event_id = $1 AND gle2.snapshot_date = (SELECT gle3.snapshot_time FROM latest_snapshot_time gle3)
 )
@@ -81,7 +81,7 @@ ranked_players AS (
   -- Then, calculate rankings using window function (no FOR UPDATE here)
   SELECT
     user_id,
-    RANK() OVER (ORDER BY score DESC, joined_at ASC) as new_place
+    DENSE_RANK() OVER (ORDER BY score DESC, joined_at ASC) as new_place
   FROM locked_players
 )
 UPDATE room_players rp
@@ -114,7 +114,7 @@ ranked_guilds AS (
   SELECT
     guild_id,
     total_score,
-    RANK() OVER (ORDER BY total_score DESC) as rank
+    DENSE_RANK() OVER (ORDER BY total_score DESC) as rank
   FROM guild_scores
 )
 INSERT INTO guild_leaderboard_entries (guild_id, guild_name, event_id, rank, total_score, snapshot_date)
@@ -3154,7 +3154,7 @@ SELECT
   guild_id,
   'Guild-' || guild_id::text as guild_name,
   total_score,
-  RANK() OVER (ORDER BY total_score DESC) as rank
+  DENSE_RANK() OVER (ORDER BY total_score DESC) as rank
 FROM guild_scores
 ORDER BY total_score DESC
 LIMIT 3

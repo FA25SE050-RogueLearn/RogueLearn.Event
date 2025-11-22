@@ -50,10 +50,10 @@ func (app *Application) routes() http.Handler {
 		r.Use(app.handlers.AuthMiddleware) // All event request routes require auth
 
 		// Requester: Submit a new request to create an event
-		r.Post("/", app.handlers.CreateEventHandler)
+		r.With(app.handlers.GuildMasterOnly).Post("/", app.handlers.CreateEventHandler)
 
 		// Requester: View their own submitted requests
-		r.Get("/{guild_id}", app.handlers.GetMyEventRequestsHandler)
+		r.With(app.handlers.AdminOnly).Get("/{guild_id}", app.handlers.GetMyEventRequestsHandler)
 	})
 
 	// Admin routes - require authentication AND "Game Master" role
