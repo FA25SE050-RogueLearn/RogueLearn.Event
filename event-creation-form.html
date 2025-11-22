@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Event Creation Request - RogueLearn</title>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+
+            body {
+                font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                padding: 20px;
+            }
+
+            .container {
+                max-width: 800px;
+                margin: 0 auto;
+                background: white;
+                border-radius: 10px;
+                box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+                padding: 30px;
+            }
+
+            h1 {
+                color: #333;
+                margin-bottom: 10px;
+                font-size: 28px;
+            }
+
+            .subtitle {
+                color: #666;
+                margin-bottom: 30px;
+                font-size: 14px;
+            }
+
+            .form-section {
+                margin-bottom: 25px;
+                padding: 20px;
+                background: #f8f9fa;
+                border-radius: 8px;
+                border-left: 4px solid #667eea;
+            }
+
+            .form-section h2 {
+                color: #667eea;
+                font-size: 18px;
+                margin-bottom: 15px;
+            }
+
+            .form-group {
+                margin-bottom: 15px;
+            }
+
+            label {
+                display: block;
+                margin-bottom: 5px;
+                color: #333;
+                font-weight: 500;
+                font-size: 14px;
+            }
+
+            label .required {
+                color: #e74c3c;
+            }
+
+            input[type="text"],
+            input[type="datetime-local"],
+            input[type="number"],
+            select,
+            textarea {
+                width: 100%;
+                padding: 10px;
+                border: 2px solid #ddd;
+                border-radius: 5px;
+                font-size: 14px;
+                transition: border-color 0.3s;
+            }
+
+            input:focus,
+            select:focus,
+            textarea:focus {
+                outline: none;
+                border-color: #667eea;
+            }
+
+            textarea {
+                resize: vertical;
+                min-height: 80px;
+            }
+
+            .form-row {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 15px;
+            }
+
+            .distribution-item {
+                background: white;
+                padding: 15px;
+                border-radius: 5px;
+                margin-bottom: 10px;
+                border: 1px solid #ddd;
+            }
+
+            .distribution-controls {
+                display: flex;
+                gap: 10px;
+                margin-bottom: 10px;
+            }
+
+            button {
+                padding: 12px 24px;
+                border: none;
+                border-radius: 5px;
+                font-size: 14px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s;
+            }
+
+            .btn-primary {
+                background: #667eea;
+                color: white;
+            }
+
+            .btn-primary:hover {
+                background: #5568d3;
+                transform: translateY(-2px);
+                box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+            }
+
+            .btn-secondary {
+                background: #6c757d;
+                color: white;
+            }
+
+            .btn-secondary:hover {
+                background: #5a6268;
+            }
+
+            .btn-danger {
+                background: #e74c3c;
+                color: white;
+                padding: 8px 16px;
+                font-size: 12px;
+            }
+
+            .btn-danger:hover {
+                background: #c0392b;
+            }
+
+            .btn-success {
+                background: #27ae60;
+                color: white;
+                padding: 8px 16px;
+                font-size: 12px;
+            }
+
+            .btn-success:hover {
+                background: #229954;
+            }
+
+            .form-actions {
+                display: flex;
+                gap: 10px;
+                margin-top: 30px;
+            }
+
+            .response-box {
+                margin-top: 20px;
+                padding: 15px;
+                border-radius: 5px;
+                display: none;
+            }
+
+            .response-box.success {
+                background: #d4edda;
+                border: 1px solid #c3e6cb;
+                color: #155724;
+            }
+
+            .response-box.error {
+                background: #f8d7da;
+                border: 1px solid #f5c6cb;
+                color: #721c24;
+            }
+
+            .response-box pre {
+                margin-top: 10px;
+                background: white;
+                padding: 10px;
+                border-radius: 3px;
+                overflow-x: auto;
+                font-size: 12px;
+            }
+
+            .topic-item {
+                background: white;
+                padding: 10px;
+                border-radius: 5px;
+                margin-bottom: 10px;
+                border: 1px solid #ddd;
+                display: flex;
+                gap: 10px;
+                align-items: center;
+            }
+
+            .topic-item input {
+                flex: 1;
+            }
+
+            .help-text {
+                font-size: 12px;
+                color: #666;
+                margin-top: 3px;
+            }
+
+            .code-battle-section {
+                display: none;
+            }
+
+            #apiUrl {
+                font-family: monospace;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Event Creation Request</h1>
+            <p class="subtitle">
+                Submit a request to create a new event in RogueLearn
+            </p>
+
+            <form id="eventRequestForm">
+                <!-- API Configuration -->
+                <div class="form-section">
+                    <h2>API Configuration</h2>
+                    <div class="form-group">
+                        <label for="apiUrl"
+                            >API URL <span class="required">*</span></label
+                        >
+                        <input
+                            type="text"
+                            id="apiUrl"
+                            value="http://localhost:8084"
+                            required
+                        />
+                        <div class="help-text">
+                            Default: http://localhost:8084 (or use
+                            http://localhost:8080 for Docker)
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="jwtToken"
+                            >JWT Bearer Token
+                            <span class="required">*</span></label
+                        >
+                        <input
+                            type="text"
+                            id="jwtToken"
+                            placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                            required
+                        />
+                        <div class="help-text">
+                            Obtain from your authentication service
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Basic Information -->
+                <div class="form-section">
+                    <h2>Basic Information</h2>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="eventType"
+                                >Event Type
+                                <span class="required">*</span></label
+                            >
+                            <select id="eventType" required>
+                                <option value="">Select event type</option>
+                                <option value="code_battle">Code Battle</option>
+                                <option value="workshop">Workshop</option>
+                                <option value="seminar">Seminar</option>
+                                <option value="social">Social</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="title"
+                                >Title <span class="required">*</span></label
+                            >
+                            <input
+                                type="text"
+                                id="title"
+                                placeholder="Spring Code Battle 2025"
+                                required
+                            />
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="description">Description</label>
+                        <textarea
+                            id="description"
+                            placeholder="Test your coding skills against other guilds"
+                        ></textarea>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="proposedStartDate"
+                                >Start Date (UTC+7)
+                                <span class="required">*</span></label
+                            >
+                            <input
+                                type="datetime-local"
+                                id="proposedStartDate"
+                                required
+                            />
+                            <div class="help-text">Time in UTC+7 timezone</div>
+                        </div>
+                        <div class="form-group">
+                            <label for="proposedEndDate"
+                                >End Date (UTC+7)
+                                <span class="required">*</span></label
+                            >
+                            <input
+                                type="datetime-local"
+                                id="proposedEndDate"
+                                required
+                            />
+                            <div class="help-text">Time in UTC+7 timezone</div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="notes">Notes</label>
+                        <textarea
+                            id="notes"
+                            placeholder="Please approve ASAP"
+                        ></textarea>
+                    </div>
+                </div>
+
+                <!-- Participation Details -->
+                <div class="form-section">
+                    <h2>Participation Details</h2>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="maxGuilds"
+                                >Max Guilds
+                                <span class="required">*</span></label
+                            >
+                            <input
+                                type="number"
+                                id="maxGuilds"
+                                min="1"
+                                value="10"
+                                required
+                            />
+                        </div>
+                        <div class="form-group">
+                            <label for="maxPlayersPerGuild"
+                                >Max Players per Guild
+                                <span class="required">*</span></label
+                            >
+                            <input
+                                type="number"
+                                id="maxPlayersPerGuild"
+                                min="1"
+                                value="5"
+                                required
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Room Configuration -->
+                <div class="form-section">
+                    <h2>Room Configuration</h2>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="numberOfRooms"
+                                >Number of Rooms
+                                <span class="required">*</span></label
+                            >
+                            <input
+                                type="number"
+                                id="numberOfRooms"
+                                min="1"
+                                value="2"
+                                required
+                            />
+                        </div>
+                        <div class="form-group">
+                            <label for="guildsPerRoom"
+                                >Guilds per Room
+                                <span class="required">*</span></label
+                            >
+                            <input
+                                type="number"
+                                id="guildsPerRoom"
+                                min="1"
+                                value="5"
+                                required
+                            />
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="roomNamingPrefix">Room Naming Prefix</label>
+                        <input
+                            type="text"
+                            id="roomNamingPrefix"
+                            placeholder="Arena"
+                            value="Arena"
+                        />
+                    </div>
+                </div>
+
+                <!-- Code Battle Specifics (shown only for code_battle type) -->
+                <div
+                    class="form-section code-battle-section"
+                    id="codeBattleSection"
+                >
+                    <h2>Code Battle Configuration</h2>
+
+                    <div class="form-group">
+                        <label>Topics (Tag UUIDs)</label>
+                        <div id="topicsList">
+                            <div class="topic-item">
+                                <input
+                                    type="text"
+                                    placeholder="550e8400-e29b-41d4-a716-446655440000"
+                                    class="topic-uuid"
+                                />
+                                <button
+                                    type="button"
+                                    class="btn-danger"
+                                    onclick="removeTopic(this)"
+                                >
+                                    Remove
+                                </button>
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            class="btn-success"
+                            onclick="addTopic()"
+                        >
+                            Add Topic
+                        </button>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Problem Distribution</label>
+                        <div id="distributionList">
+                            <div class="distribution-item">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Number of Problems</label>
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            value="2"
+                                            class="dist-num-problems"
+                                        />
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Difficulty (1-3)</label>
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="3"
+                                            value="1"
+                                            class="dist-difficulty"
+                                        />
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label>Score per Problem</label>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value="100"
+                                        class="dist-score"
+                                    />
+                                </div>
+                                <button
+                                    type="button"
+                                    class="btn-danger"
+                                    onclick="removeDistribution(this)"
+                                >
+                                    Remove Distribution
+                                </button>
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            class="btn-success"
+                            onclick="addDistribution()"
+                        >
+                            Add Distribution
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Form Actions -->
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">
+                        Submit Event Request
+                    </button>
+                    <button
+                        type="button"
+                        class="btn-secondary"
+                        onclick="resetForm()"
+                    >
+                        Reset Form
+                    </button>
+                </div>
+            </form>
+
+            <!-- Response Display -->
+            <div id="responseBox" class="response-box"></div>
+        </div>
+
+        <script>
+            // Toggle code battle section based on event type
+            document
+                .getElementById("eventType")
+                .addEventListener("change", function () {
+                    const codeBattleSection =
+                        document.getElementById("codeBattleSection");
+                    if (this.value === "code_battle") {
+                        codeBattleSection.style.display = "block";
+                    } else {
+                        codeBattleSection.style.display = "none";
+                    }
+                });
+
+            // Set default dates (start: now + 1 hour, end: now + 3 hours) in UTC+7
+            const now = new Date();
+            const startDate = new Date(now.getTime() + 60 * 60 * 1000);
+            const endDate = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+
+            document.getElementById("proposedStartDate").value =
+                formatDateTimeLocal(startDate);
+            document.getElementById("proposedEndDate").value =
+                formatDateTimeLocal(endDate);
+
+            function formatDateTimeLocal(date) {
+                // Convert to UTC+7
+                const utcTime = date.getTime();
+                const utc7Time = new Date(utcTime + 7 * 60 * 60 * 1000);
+
+                const year = utc7Time.getUTCFullYear();
+                const month = String(utc7Time.getUTCMonth() + 1).padStart(
+                    2,
+                    "0",
+                );
+                const day = String(utc7Time.getUTCDate()).padStart(2, "0");
+                const hours = String(utc7Time.getUTCHours()).padStart(2, "0");
+                const minutes = String(utc7Time.getUTCMinutes()).padStart(
+                    2,
+                    "0",
+                );
+                return `${year}-${month}-${day}T${hours}:${minutes}`;
+            }
+
+            function convertLocalToUTC7ISO(dateTimeLocalValue) {
+                // Parse the datetime-local value and treat it as UTC+7
+                const [datePart, timePart] = dateTimeLocalValue.split("T");
+                const [year, month, day] = datePart.split("-");
+                const [hours, minutes] = timePart.split(":");
+
+                // Create ISO string with +07:00 offset
+                return `${year}-${month}-${day}T${hours}:${minutes}:00+07:00`;
+            }
+
+            function addTopic() {
+                const topicsList = document.getElementById("topicsList");
+                const topicItem = document.createElement("div");
+                topicItem.className = "topic-item";
+                topicItem.innerHTML = `
+                <input type="text" placeholder="UUID" class="topic-uuid">
+                <button type="button" class="btn-danger" onclick="removeTopic(this)">Remove</button>
+            `;
+                topicsList.appendChild(topicItem);
+            }
+
+            function removeTopic(button) {
+                const topicsList = document.getElementById("topicsList");
+                if (topicsList.children.length > 1) {
+                    button.parentElement.remove();
+                } else {
+                    alert("At least one topic is required for code battles");
+                }
+            }
+
+            function addDistribution() {
+                const distributionList =
+                    document.getElementById("distributionList");
+                const distItem = document.createElement("div");
+                distItem.className = "distribution-item";
+                distItem.innerHTML = `
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Number of Problems</label>
+                        <input type="number" min="1" value="1" class="dist-num-problems">
+                    </div>
+                    <div class="form-group">
+                        <label>Difficulty (1-3)</label>
+                        <input type="number" min="1" max="3" value="1" class="dist-difficulty">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Score per Problem</label>
+                    <input type="number" min="1" value="100" class="dist-score">
+                </div>
+                <button type="button" class="btn-danger" onclick="removeDistribution(this)">Remove Distribution</button>
+            `;
+                distributionList.appendChild(distItem);
+            }
+
+            function removeDistribution(button) {
+                button.parentElement.remove();
+            }
+
+            function resetForm() {
+                document.getElementById("eventRequestForm").reset();
+                const now = new Date();
+                const startDate = new Date(now.getTime() + 60 * 60 * 1000);
+                const endDate = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+                document.getElementById("proposedStartDate").value =
+                    formatDateTimeLocal(startDate);
+                document.getElementById("proposedEndDate").value =
+                    formatDateTimeLocal(endDate);
+                document.getElementById("apiUrl").value =
+                    "http://localhost:8084";
+                document.getElementById("codeBattleSection").style.display =
+                    "none";
+                document.getElementById("responseBox").style.display = "none";
+            }
+
+            // Form submission
+            document
+                .getElementById("eventRequestForm")
+                .addEventListener("submit", async function (e) {
+                    e.preventDefault();
+
+                    const apiUrl = document
+                        .getElementById("apiUrl")
+                        .value.trim();
+                    const jwtToken = document
+                        .getElementById("jwtToken")
+                        .value.trim();
+                    const eventType =
+                        document.getElementById("eventType").value;
+
+                    // Build the request payload
+                    const payload = {
+                        event_type: eventType,
+                        title: document.getElementById("title").value.trim(),
+                        description: document
+                            .getElementById("description")
+                            .value.trim(),
+                        proposed_start_date: convertLocalToUTC7ISO(
+                            document.getElementById("proposedStartDate").value,
+                        ),
+                        proposed_end_date: convertLocalToUTC7ISO(
+                            document.getElementById("proposedEndDate").value,
+                        ),
+                        participation: {
+                            max_guilds: parseInt(
+                                document.getElementById("maxGuilds").value,
+                            ),
+                            max_players_per_guild: parseInt(
+                                document.getElementById("maxPlayersPerGuild")
+                                    .value,
+                            ),
+                        },
+                        room_configuration: {
+                            number_of_rooms: parseInt(
+                                document.getElementById("numberOfRooms").value,
+                            ),
+                            guilds_per_room: parseInt(
+                                document.getElementById("guildsPerRoom").value,
+                            ),
+                            room_naming_prefix: document
+                                .getElementById("roomNamingPrefix")
+                                .value.trim(),
+                        },
+                        notes: document.getElementById("notes").value.trim(),
+                    };
+
+                    // Add code battle specifics if applicable
+                    if (eventType === "code_battle") {
+                        const topics = Array.from(
+                            document.querySelectorAll(".topic-uuid"),
+                        )
+                            .map((input) => input.value.trim())
+                            .filter((uuid) => uuid.length > 0);
+
+                        const distribution = Array.from(
+                            document.querySelectorAll(".distribution-item"),
+                        ).map((item) => ({
+                            number_of_problems: parseInt(
+                                item.querySelector(".dist-num-problems").value,
+                            ),
+                            difficulty: parseInt(
+                                item.querySelector(".dist-difficulty").value,
+                            ),
+                            score: parseInt(
+                                item.querySelector(".dist-score").value,
+                            ),
+                        }));
+
+                        payload.event_specifics = {
+                            code_battle: {
+                                topics: topics,
+                                distribution: distribution,
+                            },
+                        };
+                    }
+
+                    // Show loading state
+                    const responseBox = document.getElementById("responseBox");
+                    responseBox.style.display = "block";
+                    responseBox.className = "response-box";
+                    responseBox.innerHTML =
+                        "<strong>Sending request...</strong>";
+
+                    try {
+                        const response = await fetch(
+                            `${apiUrl}/event-requests`,
+                            {
+                                method: "POST",
+                                headers: {
+                                    "Content-Type": "application/json",
+                                    Authorization: `Bearer ${jwtToken}`,
+                                },
+                                body: JSON.stringify(payload),
+                            },
+                        );
+
+                        const data = await response.json();
+
+                        if (response.ok) {
+                            responseBox.className = "response-box success";
+                            responseBox.innerHTML = `
+                        <strong>Success!</strong><br>
+                        ${data.msg || "Event request created successfully"}
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                        } else {
+                            responseBox.className = "response-box error";
+                            responseBox.innerHTML = `
+                        <strong>Error (${response.status}):</strong><br>
+                        ${data.msg || "Failed to create event request"}
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                        }
+                    } catch (error) {
+                        responseBox.className = "response-box error";
+                        responseBox.innerHTML = `
+                    <strong>Network Error:</strong><br>
+                    ${error.message}
+                    <pre>${error.stack}</pre>
+                `;
+                    }
+                });
+        </script>
+    </body>
+</html>
