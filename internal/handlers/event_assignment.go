@@ -166,24 +166,30 @@ func (hr *HandlerRepo) ProcessEventAssignment(ctx context.Context, eventID uuid.
 		return nil
 	}
 
-	// Get all rooms for this event
-	rooms, err := qtx.GetRoomsByEvent(ctx, event.ID)
-	if err != nil {
-		return fmt.Errorf("failed to fetch rooms: %w", err)
-	}
+	// Calculate number of rooms dynamically based on guild count
+	numRooms := calculateRoomCount(len(participants))
+	hr.logger.Info("Creating rooms dynamically",
+		"event_id", eventID,
+		"total_guilds", len(participants),
+		"rooms_to_create", numRooms)
 
-	if len(rooms) == 0 {
-		return fmt.Errorf("no rooms found for event %s", eventID)
-	}
-
-	// Calculate guilds per room
-	guildsPerRoom := int(event.GuildsPerRoom.Int32)
-	if guildsPerRoom <= 0 {
-		guildsPerRoom = len(participants) / len(rooms)
-		if guildsPerRoom == 0 {
-			guildsPerRoom = 1
+	// Create rooms dynamically
+	rooms := make([]store.Room, 0, numRooms)
+	for i := 0; i < numRooms; i++ {
+		roomName := fmt.Sprintf("Arena %d", i+1)
+		room, err := qtx.CreateRoom(ctx, store.CreateRoomParams{
+			EventID:     event.ID,
+			Name:        roomName,
+			Description: fmt.Sprintf("Room %d for event %s", i+1, event.Title),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create room: %w", err)
 		}
+		rooms = append(rooms, room)
 	}
+
+	// Calculate guilds per room for even distribution
+	guildsPerRoom := (len(participants) + numRooms - 1) / numRooms // Ceiling division
 
 	hr.logger.Info("Assigning guilds to rooms",
 		"event_id", eventID,
@@ -218,8 +224,22 @@ func (hr *HandlerRepo) ProcessEventAssignment(ctx context.Context, eventID uuid.
 		return fmt.Errorf("failed to assign code problems to event: %w", err)
 	}
 
+	// IMPORTANT: Schedule event expiry timer BEFORE committing transaction
+	// This ensures timer exists even if crash happens during/after commit
+	// If commit fails, the timer will fire but do nothing (event still pending)
+	// This is safer than losing the timer if crash happens after commit
+	endDate := event.EndDate.Time.UTC()
+	hr.eventHub.ScheduleEventExpiry(eventID, endDate)
+
+	hr.logger.Info("Event expiry timer scheduled (before commit)",
+		"event_id", eventID,
+		"end_date", endDate)
+
 	// Commit the transaction (event is already marked as 'active' at the beginning)
 	if err = tx.Commit(ctx); err != nil {
+		// Timer already scheduled but commit failed
+		// This is acceptable: timer will check event status and do nothing if not active
+		// Better than losing timer if crash happens after commit
 		return fmt.Errorf("failed to commit event assignment: %w", err)
 	}
 
@@ -227,15 +247,6 @@ func (hr *HandlerRepo) ProcessEventAssignment(ctx context.Context, eventID uuid.
 		"event_id", eventID,
 		"guilds_assigned", len(participants),
 		"rooms_used", len(rooms))
-
-	// Schedule event expiry timer
-	// When timer fires, DB is updated and EventExpired is published to RabbitMQ
-	endDate := event.EndDate.Time.UTC()
-	hr.eventHub.ScheduleEventExpiry(eventID, endDate)
-
-	hr.logger.Info("Event expiry timer scheduled",
-		"event_id", eventID,
-		"end_date", endDate)
 
 	return nil
 }
@@ -364,4 +375,21 @@ func (hr *HandlerRepo) assignCodeProblemsToEvent(ctx context.Context, qtx *store
 		"total_problems_assigned", totalAssigned)
 
 	return nil
+}
+
+// calculateRoomCount determines the number of rooms based on guild count
+// Formula: 1-3 guilds = 1 room, 4-7 guilds = 2 rooms, 8-10 = 3 rooms, etc.
+// This ensures roughly 3-4 guilds per room for optimal competition
+func calculateRoomCount(guildCount int) int {
+	if guildCount <= 3 {
+		return 1
+	}
+	if guildCount <= 7 {
+		return 2
+	}
+	if guildCount <= 10 {
+		return 3
+	}
+	// For larger counts: roughly 3-4 guilds per room
+	return (guildCount + 3) / 4
 }

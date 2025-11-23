@@ -8,14 +8,11 @@ INSERT INTO events (
   end_date,
   max_guilds,
   max_players_per_guild,
-  number_of_rooms,
-  guilds_per_room,
-  room_naming_prefix,
   original_request_id,
   status,
   assignment_date
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING *;
 
 -- name: GetEventByID :one
@@ -71,10 +68,7 @@ SET
   started_date = $5,
   end_date = $6,
   max_guilds = $7,
-  max_players_per_guild = $8,
-  number_of_rooms = $9,
-  guilds_per_room = $10,
-  room_naming_prefix = $11
+  max_players_per_guild = $8
 WHERE id = $1
 RETURNING *;
 
@@ -449,6 +443,35 @@ RETURNING *;
 DELETE FROM event_guild_participants
 WHERE event_id = $1 AND guild_id = $2;
 
+-- Event Guild Members
+-- name: AddGuildMemberToEvent :one
+INSERT INTO event_guild_members (event_id, guild_id, user_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (event_id, guild_id, user_id) DO NOTHING
+RETURNING *;
+
+-- name: GetEventGuildMembers :many
+SELECT * FROM event_guild_members
+WHERE event_id = $1 AND guild_id = $2
+ORDER BY selected_at ASC;
+
+-- name: CountEventGuildMembers :one
+SELECT COUNT(*) FROM event_guild_members
+WHERE event_id = $1 AND guild_id = $2;
+
+-- name: RemoveGuildMemberFromEvent :exec
+DELETE FROM event_guild_members
+WHERE event_id = $1 AND guild_id = $2 AND user_id = $3;
+
+-- name: GetAllEventGuildMembers :many
+SELECT * FROM event_guild_members
+WHERE event_id = $1
+ORDER BY guild_id, selected_at ASC;
+
+-- name: CheckIfUserSelectedForEvent :one
+SELECT user_id FROM event_guild_members
+WHERE event_id = $1 AND guild_id = $2 AND user_id = $3;
+
 -- Submissions
 -- name: CreateSubmission :one
 INSERT INTO submissions (user_id, code_problem_id, language_id, room_id, code_submitted, status, execution_time_ms)
@@ -692,11 +715,10 @@ WHERE code_problem_id = $1;
 INSERT INTO event_requests (
   requester_guild_id, event_type, title, description,
   proposed_start_date, proposed_end_date, notes,
-  participation_details, room_configuration, event_specifics
+  participation_details, event_specifics
 ) VALUES (
   $1, $2, $3, $4, $5, $6, $7,
   sqlc.arg(participation_details)::jsonb,
-  sqlc.arg(room_configuration)::jsonb,
   sqlc.arg(event_specifics)::jsonb
 ) RETURNING *;
 

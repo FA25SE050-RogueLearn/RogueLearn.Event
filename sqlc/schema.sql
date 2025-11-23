@@ -78,6 +78,15 @@ CREATE TABLE public.event_guild_participants (
   CONSTRAINT event_guild_participants_event_id_fkey FOREIGN KEY (event_id) REFERENCES public.events(id),
   CONSTRAINT event_guild_participants_room_id_fkey FOREIGN KEY (room_id) REFERENCES public.rooms(id)
 );
+create table public.event_guild_members (
+  event_id uuid not null,
+  guild_id uuid not null,
+  user_id uuid not null,
+  selected_at timestamp with time zone not null default (now() AT TIME ZONE 'utc'::text),
+  constraint event_guild_members_pkey primary key (event_id, guild_id, user_id),
+  constraint event_guild_members_event_id_guild_id_fkey foreign KEY (event_id, guild_id) references event_guild_participants (event_id, guild_id)
+);
+
 CREATE TABLE public.events (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   title text NOT NULL DEFAULT ''::text,
@@ -87,9 +96,6 @@ CREATE TABLE public.events (
   end_date timestamp with time zone NOT NULL DEFAULT (now() AT TIME ZONE 'utc'::text),
   max_guilds integer,
   max_players_per_guild integer,
-  number_of_rooms integer,
-  guilds_per_room integer,
-  room_naming_prefix text,
   original_request_id uuid,
   status event_status NOT NULL DEFAULT 'pending',
   assignment_date timestamp with time zone,  -- When to assign guilds to rooms (e.g., 15 min before start)
@@ -199,7 +205,6 @@ CREATE TABLE public.event_requests (
   proposed_end_date timestamp with time zone NOT NULL,
   notes text DEFAULT ''::text,
   participation_details jsonb NOT NULL,
-  room_configuration jsonb NOT NULL,
   event_specifics jsonb,
   rejection_reason text,
   approved_event_id uuid,

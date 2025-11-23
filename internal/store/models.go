@@ -264,9 +264,6 @@ type Event struct {
 	EndDate            pgtype.Timestamptz
 	MaxGuilds          pgtype.Int4
 	MaxPlayersPerGuild pgtype.Int4
-	NumberOfRooms      pgtype.Int4
-	GuildsPerRoom      pgtype.Int4
-	RoomNamingPrefix   pgtype.Text
 	OriginalRequestID  pgtype.UUID
 	Status             EventStatus
 	AssignmentDate     pgtype.Timestamptz
@@ -276,6 +273,13 @@ type EventCodeProblem struct {
 	EventID       pgtype.UUID
 	CodeProblemID pgtype.UUID
 	Score         int32
+}
+
+type EventGuildMember struct {
+	EventID    pgtype.UUID
+	GuildID    pgtype.UUID
+	UserID     pgtype.UUID
+	SelectedAt pgtype.Timestamptz
 }
 
 type EventGuildParticipant struct {
@@ -299,7 +303,6 @@ type EventRequest struct {
 	ProposedEndDate      pgtype.Timestamptz
 	Notes                pgtype.Text
 	ParticipationDetails string
-	RoomConfiguration    string
 	EventSpecifics       []byte
 	RejectionReason      pgtype.Text
 	ApprovedEventID      pgtype.UUID

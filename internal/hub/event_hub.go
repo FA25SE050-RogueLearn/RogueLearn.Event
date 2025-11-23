@@ -219,7 +219,14 @@ func (e *EventHub) completeEvent(eventID uuid.UUID) bool {
 		return false
 	}
 
-	// Transaction committed successfully - now notify other instances
+	// Transaction committed successfully
+	// Now perform non-critical operations that shouldn't block or rollback the transaction
+
+	// Grant achievements to top 3 players asynchronously
+	// This is done AFTER transaction commit to prevent gRPC failures from rolling back event completion
+	go e.grantAchievementsAsync(ctx, eventID)
+
+	// Notify other instances via RabbitMQ
 	// Use retry mechanism for RabbitMQ publish (P0-2)
 	e.publishEventExpiredWithRetry(ctx, eventID)
 
@@ -330,40 +337,8 @@ func (e *EventHub) completeEventTransaction(ctx context.Context, eventID uuid.UU
 			"event_id", eventID)
 	}
 
-	// TODO: Grant achievements to top 3 and all user of event
-	winningMembers, err := qtx.GetTop3PlayersByEvent(ctx, toPgtypeUUID(eventID))
-	if err != nil {
-		e.logger.Warn("Failed to get top 3 players by event",
-			"event_id", eventID,
-			"error", err,
-			"action", "continuing - top 3 players are optional")
-		return false
-	} else {
-		e.logger.Info("Successfully retrieved top 3 players by event",
-			"event_id", eventID,
-			"winning_members", winningMembers)
-	}
-	// granting using grpc
-	// TODO: Refactor later
-	for i, member := range winningMembers {
-		resp, err := e.userClient.GrantAchievements(ctx,
-			&pb.GrantAchievementsRequest{
-				UserAchievements: []*pb.UserAchievementGrant{
-					&pb.UserAchievementGrant{
-						UserId:         member.UserID.String(),
-						AchievementKey: AchievementCodeBattle[i],
-					},
-				},
-			})
-		if err != nil {
-			e.logger.Error("Failed to grant achievement to top 3 players",
-				"event_id", eventID,
-				"error", err,
-				"action", "continuing - top 3 players are optional")
-			return false
-		}
-		e.logger.Debug("Achievement granted.", *resp)
-	}
+	// Note: Achievement granting moved outside transaction (see grantAchievementsAsync)
+	// This prevents gRPC failures from blocking event completion
 
 	// Step 5: Commit the transaction (all-or-nothing)
 	// If this fails, everything above is rolled back
@@ -383,6 +358,79 @@ func (e *EventHub) completeEventTransaction(ctx context.Context, eventID uuid.UU
 		"final_leaderboard_captured", true)
 
 	return true
+}
+
+// grantAchievementsAsync grants achievements to top 3 players asynchronously.
+// This runs in a separate goroutine to prevent gRPC failures from blocking event completion.
+// Called AFTER the event completion transaction has committed.
+func (e *EventHub) grantAchievementsAsync(ctx context.Context, eventID uuid.UUID) {
+	// Create a new context with timeout for gRPC calls
+	grantCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	e.logger.Info("Starting async achievement granting", "event_id", eventID)
+
+	// Get top 3 players
+	winningMembers, err := e.queries.GetTop3PlayersByEvent(grantCtx, toPgtypeUUID(eventID))
+	if err != nil {
+		e.logger.Error("Failed to get top 3 players for achievement granting",
+			"event_id", eventID,
+			"error", err)
+		return
+	}
+
+	if len(winningMembers) == 0 {
+		e.logger.Info("No winners found for achievement granting", "event_id", eventID)
+		return
+	}
+
+	e.logger.Info("Granting achievements to top players",
+		"event_id", eventID,
+		"player_count", len(winningMembers))
+
+	// Grant achievements to each top player
+	for i, member := range winningMembers {
+		// Fix: Use i+1 since map keys are 1-based
+		achievementKey := AchievementCodeBattle[i+1]
+		if achievementKey == "" {
+			e.logger.Warn("No achievement key for rank",
+				"rank", i+1,
+				"event_id", eventID)
+			continue
+		}
+
+		resp, err := e.userClient.GrantAchievements(grantCtx,
+			&pb.GrantAchievementsRequest{
+				UserAchievements: []*pb.UserAchievementGrant{
+					{
+						UserId:         member.UserID.String(),
+						AchievementKey: achievementKey,
+					},
+				},
+			})
+
+		if err != nil {
+			e.logger.Error("Failed to grant achievement to player",
+				"event_id", eventID,
+				"user_id", member.UserID.String(),
+				"rank", i+1,
+				"achievement", achievementKey,
+				"error", err)
+			// Continue to next player - don't fail entire operation
+			continue
+		}
+
+		e.logger.Info("Successfully granted achievement",
+			"event_id", eventID,
+			"user_id", member.UserID.String(),
+			"rank", i+1,
+			"achievement", achievementKey,
+			"response", resp)
+	}
+
+	e.logger.Info("Completed async achievement granting",
+		"event_id", eventID,
+		"total_players", len(winningMembers))
 }
 
 // buildEventExpiredMessage creates an enhanced EventExpired message with winners and statistics.

@@ -11,6 +11,32 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addGuildMemberToEvent = `-- name: AddGuildMemberToEvent :one
+INSERT INTO event_guild_members (event_id, guild_id, user_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (event_id, guild_id, user_id) DO NOTHING
+RETURNING event_id, guild_id, user_id, selected_at
+`
+
+type AddGuildMemberToEventParams struct {
+	EventID pgtype.UUID
+	GuildID pgtype.UUID
+	UserID  pgtype.UUID
+}
+
+// Event Guild Members
+func (q *Queries) AddGuildMemberToEvent(ctx context.Context, arg AddGuildMemberToEventParams) (EventGuildMember, error) {
+	row := q.db.QueryRow(ctx, addGuildMemberToEvent, arg.EventID, arg.GuildID, arg.UserID)
+	var i EventGuildMember
+	err := row.Scan(
+		&i.EventID,
+		&i.GuildID,
+		&i.UserID,
+		&i.SelectedAt,
+	)
+	return i, err
+}
+
 const addRoomPlayerScore = `-- name: AddRoomPlayerScore :exec
 UPDATE public.room_players
 SET score = score + $1::integer
@@ -191,12 +217,47 @@ func (q *Queries) CheckIfProblemAlreadySolved(ctx context.Context, arg CheckIfPr
 	return i, err
 }
 
+const checkIfUserSelectedForEvent = `-- name: CheckIfUserSelectedForEvent :one
+SELECT user_id FROM event_guild_members
+WHERE event_id = $1 AND guild_id = $2 AND user_id = $3
+`
+
+type CheckIfUserSelectedForEventParams struct {
+	EventID pgtype.UUID
+	GuildID pgtype.UUID
+	UserID  pgtype.UUID
+}
+
+func (q *Queries) CheckIfUserSelectedForEvent(ctx context.Context, arg CheckIfUserSelectedForEventParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, checkIfUserSelectedForEvent, arg.EventID, arg.GuildID, arg.UserID)
+	var user_id pgtype.UUID
+	err := row.Scan(&user_id)
+	return user_id, err
+}
+
 const countCodeProblems = `-- name: CountCodeProblems :one
 SELECT COUNT(*) FROM code_problems
 `
 
 func (q *Queries) CountCodeProblems(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countCodeProblems)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countEventGuildMembers = `-- name: CountEventGuildMembers :one
+SELECT COUNT(*) FROM event_guild_members
+WHERE event_id = $1 AND guild_id = $2
+`
+
+type CountEventGuildMembersParams struct {
+	EventID pgtype.UUID
+	GuildID pgtype.UUID
+}
+
+func (q *Queries) CountEventGuildMembers(ctx context.Context, arg CountEventGuildMembersParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countEventGuildMembers, arg.EventID, arg.GuildID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -385,15 +446,12 @@ INSERT INTO events (
   end_date,
   max_guilds,
   max_players_per_guild,
-  number_of_rooms,
-  guilds_per_room,
-  room_naming_prefix,
   original_request_id,
   status,
   assignment_date
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-RETURNING id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, original_request_id, status, assignment_date
 `
 
 type CreateEventParams struct {
@@ -404,9 +462,6 @@ type CreateEventParams struct {
 	EndDate            pgtype.Timestamptz
 	MaxGuilds          pgtype.Int4
 	MaxPlayersPerGuild pgtype.Int4
-	NumberOfRooms      pgtype.Int4
-	GuildsPerRoom      pgtype.Int4
-	RoomNamingPrefix   pgtype.Text
 	OriginalRequestID  pgtype.UUID
 	Status             EventStatus
 	AssignmentDate     pgtype.Timestamptz
@@ -422,9 +477,6 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event
 		arg.EndDate,
 		arg.MaxGuilds,
 		arg.MaxPlayersPerGuild,
-		arg.NumberOfRooms,
-		arg.GuildsPerRoom,
-		arg.RoomNamingPrefix,
 		arg.OriginalRequestID,
 		arg.Status,
 		arg.AssignmentDate,
@@ -439,9 +491,6 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event
 		&i.EndDate,
 		&i.MaxGuilds,
 		&i.MaxPlayersPerGuild,
-		&i.NumberOfRooms,
-		&i.GuildsPerRoom,
-		&i.RoomNamingPrefix,
 		&i.OriginalRequestID,
 		&i.Status,
 		&i.AssignmentDate,
@@ -495,13 +544,12 @@ const createEventRequest = `-- name: CreateEventRequest :one
 INSERT INTO event_requests (
   requester_guild_id, event_type, title, description,
   proposed_start_date, proposed_end_date, notes,
-  participation_details, room_configuration, event_specifics
+  participation_details, event_specifics
 ) VALUES (
   $1, $2, $3, $4, $5, $6, $7,
   $8::jsonb,
-  $9::jsonb,
-  $10::jsonb
-) RETURNING id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, room_configuration, event_specifics, rejection_reason, approved_event_id
+  $9::jsonb
+) RETURNING id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id
 `
 
 type CreateEventRequestParams struct {
@@ -513,7 +561,6 @@ type CreateEventRequestParams struct {
 	ProposedEndDate      pgtype.Timestamptz
 	Notes                pgtype.Text
 	ParticipationDetails string
-	RoomConfiguration    string
 	EventSpecifics       string
 }
 
@@ -528,7 +575,6 @@ func (q *Queries) CreateEventRequest(ctx context.Context, arg CreateEventRequest
 		arg.ProposedEndDate,
 		arg.Notes,
 		arg.ParticipationDetails,
-		arg.RoomConfiguration,
 		arg.EventSpecifics,
 	)
 	var i EventRequest
@@ -546,7 +592,6 @@ func (q *Queries) CreateEventRequest(ctx context.Context, arg CreateEventRequest
 		&i.ProposedEndDate,
 		&i.Notes,
 		&i.ParticipationDetails,
-		&i.RoomConfiguration,
 		&i.EventSpecifics,
 		&i.RejectionReason,
 		&i.ApprovedEventID,
@@ -1005,7 +1050,7 @@ func (q *Queries) DisconnectRoomPlayer(ctx context.Context, arg DisconnectRoomPl
 }
 
 const getActiveEvents = `-- name: GetActiveEvents :many
-SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date FROM events
+SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, original_request_id, status, assignment_date FROM events
 WHERE status = 'active'
 ORDER BY started_date ASC
 `
@@ -1028,12 +1073,40 @@ func (q *Queries) GetActiveEvents(ctx context.Context) ([]Event, error) {
 			&i.EndDate,
 			&i.MaxGuilds,
 			&i.MaxPlayersPerGuild,
-			&i.NumberOfRooms,
-			&i.GuildsPerRoom,
-			&i.RoomNamingPrefix,
 			&i.OriginalRequestID,
 			&i.Status,
 			&i.AssignmentDate,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getAllEventGuildMembers = `-- name: GetAllEventGuildMembers :many
+SELECT event_id, guild_id, user_id, selected_at FROM event_guild_members
+WHERE event_id = $1
+ORDER BY guild_id, selected_at ASC
+`
+
+func (q *Queries) GetAllEventGuildMembers(ctx context.Context, eventID pgtype.UUID) ([]EventGuildMember, error) {
+	rows, err := q.db.Query(ctx, getAllEventGuildMembers, eventID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EventGuildMember
+	for rows.Next() {
+		var i EventGuildMember
+		if err := rows.Scan(
+			&i.EventID,
+			&i.GuildID,
+			&i.UserID,
+			&i.SelectedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1384,7 +1457,7 @@ func (q *Queries) GetCodeProblemsByTag(ctx context.Context, id pgtype.UUID) ([]G
 }
 
 const getEventByID = `-- name: GetEventByID :one
-SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date FROM events WHERE id = $1
+SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, original_request_id, status, assignment_date FROM events WHERE id = $1
 `
 
 func (q *Queries) GetEventByID(ctx context.Context, id pgtype.UUID) (Event, error) {
@@ -1399,9 +1472,6 @@ func (q *Queries) GetEventByID(ctx context.Context, id pgtype.UUID) (Event, erro
 		&i.EndDate,
 		&i.MaxGuilds,
 		&i.MaxPlayersPerGuild,
-		&i.NumberOfRooms,
-		&i.GuildsPerRoom,
-		&i.RoomNamingPrefix,
 		&i.OriginalRequestID,
 		&i.Status,
 		&i.AssignmentDate,
@@ -1475,6 +1545,42 @@ func (q *Queries) GetEventCodeProblems(ctx context.Context, eventID pgtype.UUID)
 			&i.Title,
 			&i.Difficulty,
 			&i.ProblemStatement,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getEventGuildMembers = `-- name: GetEventGuildMembers :many
+SELECT event_id, guild_id, user_id, selected_at FROM event_guild_members
+WHERE event_id = $1 AND guild_id = $2
+ORDER BY selected_at ASC
+`
+
+type GetEventGuildMembersParams struct {
+	EventID pgtype.UUID
+	GuildID pgtype.UUID
+}
+
+func (q *Queries) GetEventGuildMembers(ctx context.Context, arg GetEventGuildMembersParams) ([]EventGuildMember, error) {
+	rows, err := q.db.Query(ctx, getEventGuildMembers, arg.EventID, arg.GuildID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EventGuildMember
+	for rows.Next() {
+		var i EventGuildMember
+		if err := rows.Scan(
+			&i.EventID,
+			&i.GuildID,
+			&i.UserID,
+			&i.SelectedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1571,7 +1677,7 @@ func (q *Queries) GetEventParticipants(ctx context.Context, eventID pgtype.UUID)
 }
 
 const getEventRequestByID = `-- name: GetEventRequestByID :one
-SELECT id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, room_configuration, event_specifics, rejection_reason, approved_event_id FROM event_requests WHERE id = $1
+SELECT id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id FROM event_requests WHERE id = $1
 `
 
 func (q *Queries) GetEventRequestByID(ctx context.Context, id pgtype.UUID) (EventRequest, error) {
@@ -1591,7 +1697,6 @@ func (q *Queries) GetEventRequestByID(ctx context.Context, id pgtype.UUID) (Even
 		&i.ProposedEndDate,
 		&i.Notes,
 		&i.ParticipationDetails,
-		&i.RoomConfiguration,
 		&i.EventSpecifics,
 		&i.RejectionReason,
 		&i.ApprovedEventID,
@@ -1663,7 +1768,7 @@ func (q *Queries) GetEventStatistics(ctx context.Context, eventID pgtype.UUID) (
 
 const getEventWithProblemsAndLanguages = `-- name: GetEventWithProblemsAndLanguages :many
 SELECT
-    e.id, e.title, e.description, e.type, e.started_date, e.end_date, e.max_guilds, e.max_players_per_guild, e.number_of_rooms, e.guilds_per_room, e.room_naming_prefix, e.original_request_id, e.status, e.assignment_date,
+    e.id, e.title, e.description, e.type, e.started_date, e.end_date, e.max_guilds, e.max_players_per_guild, e.original_request_id, e.status, e.assignment_date,
     cp.id as problem_id,
     cp.title as problem_title,
     cp.difficulty as problem_difficulty,
@@ -1684,9 +1789,6 @@ type GetEventWithProblemsAndLanguagesRow struct {
 	EndDate            pgtype.Timestamptz
 	MaxGuilds          pgtype.Int4
 	MaxPlayersPerGuild pgtype.Int4
-	NumberOfRooms      pgtype.Int4
-	GuildsPerRoom      pgtype.Int4
-	RoomNamingPrefix   pgtype.Text
 	OriginalRequestID  pgtype.UUID
 	Status             EventStatus
 	AssignmentDate     pgtype.Timestamptz
@@ -1715,9 +1817,6 @@ func (q *Queries) GetEventWithProblemsAndLanguages(ctx context.Context, id pgtyp
 			&i.EndDate,
 			&i.MaxGuilds,
 			&i.MaxPlayersPerGuild,
-			&i.NumberOfRooms,
-			&i.GuildsPerRoom,
-			&i.RoomNamingPrefix,
 			&i.OriginalRequestID,
 			&i.Status,
 			&i.AssignmentDate,
@@ -1737,7 +1836,7 @@ func (q *Queries) GetEventWithProblemsAndLanguages(ctx context.Context, id pgtyp
 }
 
 const getEvents = `-- name: GetEvents :many
-SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date FROM events
+SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, original_request_id, status, assignment_date FROM events
 ORDER BY started_date ASC
 LIMIT $1
 OFFSET $2
@@ -1766,9 +1865,6 @@ func (q *Queries) GetEvents(ctx context.Context, arg GetEventsParams) ([]Event, 
 			&i.EndDate,
 			&i.MaxGuilds,
 			&i.MaxPlayersPerGuild,
-			&i.NumberOfRooms,
-			&i.GuildsPerRoom,
-			&i.RoomNamingPrefix,
 			&i.OriginalRequestID,
 			&i.Status,
 			&i.AssignmentDate,
@@ -1784,7 +1880,7 @@ func (q *Queries) GetEvents(ctx context.Context, arg GetEventsParams) ([]Event, 
 }
 
 const getEventsByStatus = `-- name: GetEventsByStatus :many
-SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date FROM events
+SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, original_request_id, status, assignment_date FROM events
 WHERE status = $1
 ORDER BY started_date ASC
 LIMIT $2
@@ -1816,9 +1912,6 @@ func (q *Queries) GetEventsByStatus(ctx context.Context, arg GetEventsByStatusPa
 			&i.EndDate,
 			&i.MaxGuilds,
 			&i.MaxPlayersPerGuild,
-			&i.NumberOfRooms,
-			&i.GuildsPerRoom,
-			&i.RoomNamingPrefix,
 			&i.OriginalRequestID,
 			&i.Status,
 			&i.AssignmentDate,
@@ -1834,7 +1927,7 @@ func (q *Queries) GetEventsByStatus(ctx context.Context, arg GetEventsByStatusPa
 }
 
 const getEventsByType = `-- name: GetEventsByType :many
-SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date FROM events
+SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, original_request_id, status, assignment_date FROM events
 WHERE type = $1
 ORDER BY started_date ASC
 `
@@ -1857,9 +1950,6 @@ func (q *Queries) GetEventsByType(ctx context.Context, type_ EventType) ([]Event
 			&i.EndDate,
 			&i.MaxGuilds,
 			&i.MaxPlayersPerGuild,
-			&i.NumberOfRooms,
-			&i.GuildsPerRoom,
-			&i.RoomNamingPrefix,
 			&i.OriginalRequestID,
 			&i.Status,
 			&i.AssignmentDate,
@@ -1875,7 +1965,7 @@ func (q *Queries) GetEventsByType(ctx context.Context, type_ EventType) ([]Event
 }
 
 const getExpiredActiveEvents = `-- name: GetExpiredActiveEvents :many
-SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date FROM events
+SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, original_request_id, status, assignment_date FROM events
 WHERE status = 'active'
   AND end_date < NOW() AT TIME ZONE 'utc'
 ORDER BY end_date ASC
@@ -1902,9 +1992,6 @@ func (q *Queries) GetExpiredActiveEvents(ctx context.Context) ([]Event, error) {
 			&i.EndDate,
 			&i.MaxGuilds,
 			&i.MaxPlayersPerGuild,
-			&i.NumberOfRooms,
-			&i.GuildsPerRoom,
-			&i.RoomNamingPrefix,
 			&i.OriginalRequestID,
 			&i.Status,
 			&i.AssignmentDate,
@@ -2315,7 +2402,7 @@ func (q *Queries) GetLeaderboardByUser(ctx context.Context, userID pgtype.UUID) 
 
 const getPendingEventsForAssignment = `-- name: GetPendingEventsForAssignment :many
 
-SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date FROM events
+SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, original_request_id, status, assignment_date FROM events
 WHERE status = 'pending'
   AND assignment_date <= NOW() AT TIME ZONE 'utc'
 ORDER BY assignment_date ASC
@@ -2344,9 +2431,6 @@ func (q *Queries) GetPendingEventsForAssignment(ctx context.Context) ([]Event, e
 			&i.EndDate,
 			&i.MaxGuilds,
 			&i.MaxPlayersPerGuild,
-			&i.NumberOfRooms,
-			&i.GuildsPerRoom,
-			&i.RoomNamingPrefix,
 			&i.OriginalRequestID,
 			&i.Status,
 			&i.AssignmentDate,
@@ -3278,7 +3362,7 @@ func (q *Queries) GetUserSubmissionStats(ctx context.Context, userID pgtype.UUID
 }
 
 const listEventRequests = `-- name: ListEventRequests :many
-SELECT id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, room_configuration, event_specifics, rejection_reason, approved_event_id FROM event_requests
+SELECT id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id FROM event_requests
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -3311,7 +3395,6 @@ func (q *Queries) ListEventRequests(ctx context.Context, arg ListEventRequestsPa
 			&i.ProposedEndDate,
 			&i.Notes,
 			&i.ParticipationDetails,
-			&i.RoomConfiguration,
 			&i.EventSpecifics,
 			&i.RejectionReason,
 			&i.ApprovedEventID,
@@ -3327,7 +3410,7 @@ func (q *Queries) ListEventRequests(ctx context.Context, arg ListEventRequestsPa
 }
 
 const listEventRequestsByGuild = `-- name: ListEventRequestsByGuild :many
-SELECT id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, room_configuration, event_specifics, rejection_reason, approved_event_id FROM event_requests
+SELECT id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id FROM event_requests
 WHERE requester_guild_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3
@@ -3362,7 +3445,6 @@ func (q *Queries) ListEventRequestsByGuild(ctx context.Context, arg ListEventReq
 			&i.ProposedEndDate,
 			&i.Notes,
 			&i.ParticipationDetails,
-			&i.RoomConfiguration,
 			&i.EventSpecifics,
 			&i.RejectionReason,
 			&i.ApprovedEventID,
@@ -3378,7 +3460,7 @@ func (q *Queries) ListEventRequestsByGuild(ctx context.Context, arg ListEventReq
 }
 
 const listEventRequestsByStatus = `-- name: ListEventRequestsByStatus :many
-SELECT id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, room_configuration, event_specifics, rejection_reason, approved_event_id FROM event_requests
+SELECT id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id FROM event_requests
 WHERE status = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3
@@ -3413,7 +3495,6 @@ func (q *Queries) ListEventRequestsByStatus(ctx context.Context, arg ListEventRe
 			&i.ProposedEndDate,
 			&i.Notes,
 			&i.ParticipationDetails,
-			&i.RoomConfiguration,
 			&i.EventSpecifics,
 			&i.RejectionReason,
 			&i.ApprovedEventID,
@@ -3426,6 +3507,22 @@ func (q *Queries) ListEventRequestsByStatus(ctx context.Context, arg ListEventRe
 		return nil, err
 	}
 	return items, nil
+}
+
+const removeGuildMemberFromEvent = `-- name: RemoveGuildMemberFromEvent :exec
+DELETE FROM event_guild_members
+WHERE event_id = $1 AND guild_id = $2 AND user_id = $3
+`
+
+type RemoveGuildMemberFromEventParams struct {
+	EventID pgtype.UUID
+	GuildID pgtype.UUID
+	UserID  pgtype.UUID
+}
+
+func (q *Queries) RemoveGuildMemberFromEvent(ctx context.Context, arg RemoveGuildMemberFromEventParams) error {
+	_, err := q.db.Exec(ctx, removeGuildMemberFromEvent, arg.EventID, arg.GuildID, arg.UserID)
+	return err
 }
 
 const updateCodeProblem = `-- name: UpdateCodeProblem :one
@@ -3506,12 +3603,9 @@ SET
   started_date = $5,
   end_date = $6,
   max_guilds = $7,
-  max_players_per_guild = $8,
-  number_of_rooms = $9,
-  guilds_per_room = $10,
-  room_naming_prefix = $11
+  max_players_per_guild = $8
 WHERE id = $1
-RETURNING id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date
+RETURNING id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, original_request_id, status, assignment_date
 `
 
 type UpdateEventParams struct {
@@ -3523,9 +3617,6 @@ type UpdateEventParams struct {
 	EndDate            pgtype.Timestamptz
 	MaxGuilds          pgtype.Int4
 	MaxPlayersPerGuild pgtype.Int4
-	NumberOfRooms      pgtype.Int4
-	GuildsPerRoom      pgtype.Int4
-	RoomNamingPrefix   pgtype.Text
 }
 
 func (q *Queries) UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event, error) {
@@ -3538,9 +3629,6 @@ func (q *Queries) UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event
 		arg.EndDate,
 		arg.MaxGuilds,
 		arg.MaxPlayersPerGuild,
-		arg.NumberOfRooms,
-		arg.GuildsPerRoom,
-		arg.RoomNamingPrefix,
 	)
 	var i Event
 	err := row.Scan(
@@ -3552,9 +3640,6 @@ func (q *Queries) UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event
 		&i.EndDate,
 		&i.MaxGuilds,
 		&i.MaxPlayersPerGuild,
-		&i.NumberOfRooms,
-		&i.GuildsPerRoom,
-		&i.RoomNamingPrefix,
 		&i.OriginalRequestID,
 		&i.Status,
 		&i.AssignmentDate,
@@ -3617,7 +3702,7 @@ SET
   rejection_reason = $4,
   approved_event_id = $5
 WHERE id = $1
-RETURNING id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, room_configuration, event_specifics, rejection_reason, approved_event_id
+RETURNING id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id
 `
 
 type UpdateEventRequestStatusParams struct {
@@ -3651,7 +3736,6 @@ func (q *Queries) UpdateEventRequestStatus(ctx context.Context, arg UpdateEventR
 		&i.ProposedEndDate,
 		&i.Notes,
 		&i.ParticipationDetails,
-		&i.RoomConfiguration,
 		&i.EventSpecifics,
 		&i.RejectionReason,
 		&i.ApprovedEventID,
@@ -3663,7 +3747,7 @@ const updateEventStatusToActive = `-- name: UpdateEventStatusToActive :one
 UPDATE events
 SET status = 'active'
 WHERE id = $1 AND status = 'pending'
-RETURNING id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, number_of_rooms, guilds_per_room, room_naming_prefix, original_request_id, status, assignment_date
+RETURNING id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, original_request_id, status, assignment_date
 `
 
 // Atomically mark event as 'active' and prevent duplicate processing
@@ -3681,9 +3765,6 @@ func (q *Queries) UpdateEventStatusToActive(ctx context.Context, id pgtype.UUID)
 		&i.EndDate,
 		&i.MaxGuilds,
 		&i.MaxPlayersPerGuild,
-		&i.NumberOfRooms,
-		&i.GuildsPerRoom,
-		&i.RoomNamingPrefix,
 		&i.OriginalRequestID,
 		&i.Status,
 		&i.AssignmentDate,

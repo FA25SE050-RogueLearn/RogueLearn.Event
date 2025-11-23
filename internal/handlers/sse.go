@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ var (
 	ErrPlayerNotInGuild       = errors.New("Player is not in any Guild.")
 	ErrGuildNotAssignedToRoom = errors.New("Guild is not assigned to this room.")
 	ErrEventEnded             = errors.New("Event has ended.")
+	ErrUserNotInSelectedList  = errors.New("User is not in the selected list.")
 )
 
 // SSE Event Handler for room's leaderboard
@@ -81,7 +83,11 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 
 	// check if player has permission to join this room
 	// First, get the user's guild via gRPC
-	userProfile, err := hr.userClient.GetUserProfileByAuthId(r.Context(), &pb.GetUserProfileByAuthIdRequest{
+	// Use a separate context with timeout for gRPC calls (not the SSE connection context)
+	grpcCtx, grpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer grpcCancel()
+
+	userProfile, err := hr.userClient.GetUserProfileByAuthId(grpcCtx, &pb.GetUserProfileByAuthIdRequest{
 		AuthUserId: userID.String(),
 	})
 	if err != nil {
@@ -90,7 +96,7 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	guild, err := hr.userClient.GetMyGuild(r.Context(), &pb.GetMyGuildRequest{
+	guild, err := hr.userClient.GetMyGuild(grpcCtx, &pb.GetMyGuildRequest{
 		AuthUserId: userProfile.AuthUserId,
 	})
 	if err != nil {
@@ -138,6 +144,30 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 		"room_id", roomID,
 		"event_id", eventID)
 
+	// Validate that the user is in the selected members list for this event
+	_, err = hr.queries.CheckIfUserSelectedForEvent(r.Context(), store.CheckIfUserSelectedForEventParams{
+		EventID: toPgtypeUUID(eventID),
+		GuildID: toPgtypeUUID(guildID),
+		UserID:  toPgtypeUUID(userID),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		hr.logger.Warn("user not selected to compete in this event",
+			"user_id", userID,
+			"guild_id", guildID,
+			"event_id", eventID)
+		hr.badRequest(w, r, ErrUserNotInSelectedList)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to validate user selection for event", "error", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	hr.logger.Info("user selection validated - player is authorized to join",
+		"user_id", userID,
+		"guild_id", guildID,
+		"event_id", eventID)
+
 	// Set http headers required for SSE
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -162,6 +192,19 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	if roomHub.Listerners == nil {
 		roomHub.Listerners = make(map[uuid.UUID]chan<- events.SseEvent)
 	}
+
+	// Check connection limit to prevent DoS attacks
+	const maxConnectionsPerRoom = 100
+	if len(roomHub.Listerners) >= maxConnectionsPerRoom {
+		roomHub.Mu.Unlock()
+		hr.logger.Warn("room connection limit reached",
+			"room_id", roomID,
+			"current_connections", len(roomHub.Listerners),
+			"max_connections", maxConnectionsPerRoom)
+		http.Error(w, "room is full - too many connections", http.StatusServiceUnavailable)
+		return
+	}
+
 	roomHub.Listerners[userID] = listen
 	roomHub.Mu.Unlock()
 
@@ -212,85 +255,6 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 
 			fmt.Fprintf(w, "data: %s\n\n", string(data))
 
-			w.(http.Flusher).Flush()
-		}
-	}
-}
-
-// SSE Event Handler for event's leaderboards
-// Send the Event's changes of events to connected users
-// SpectateEventHandler handles SSE connections for the event-wide guild leaderboard.
-func (hr *HandlerRepo) SpectateEventHandler(w http.ResponseWriter, r *http.Request) {
-	eventIDStr := chi.URLParam(r, "event_id")
-	eventID, err := uuid.Parse(eventIDStr)
-	if err != nil {
-		hr.badRequest(w, r, errors.New("invalid event ID format"))
-		return
-	}
-
-	// Set headers for SSE
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	// Create a unique ID for this listener and a channel for events
-	clientID := uuid.New()
-	listen := make(chan events.SseEvent, 50) // Buffered channel to prevent blocking during burst events
-
-	// Add listener to the main EventHub
-	hr.eventHub.EventListenersMu.Lock()
-	if hr.eventHub.EventListeners[eventID] == nil {
-		hr.eventHub.EventListeners[eventID] = make(map[uuid.UUID]chan<- events.SseEvent)
-	}
-
-	hr.eventHub.EventListeners[eventID][clientID] = listen
-	hr.eventHub.EventListenersMu.Unlock()
-
-	// Defer cleanup to remove the listener when the connection closes
-	defer func() {
-		hr.eventHub.EventListenersMu.Lock()
-		if eventListeners, ok := hr.eventHub.EventListeners[eventID]; ok {
-			delete(eventListeners, clientID)
-			if len(eventListeners) == 0 {
-				delete(hr.eventHub.EventListeners, eventID)
-			}
-		}
-		hr.eventHub.EventListenersMu.Unlock()
-		close(listen)
-		hr.logger.Info("Guild leaderboard listener disconnected", "event_id", eventID, "client_id", clientID)
-	}()
-
-	hr.logger.Info("Guild leaderboard listener connected", "event_id", eventID, "client_id", clientID)
-
-	// --- Send initial leaderboard state ---
-	// So the user sees data immediately upon connecting
-	initialEntries, err := hr.queries.GetGuildLeaderboardByEvent(r.Context(), toPgtypeUUID(eventID))
-	if err == nil {
-		initialEvent := events.SseEvent{
-			EventType: events.GUILD_LEADERBOARD_UPDATED,
-			Data:      initialEntries,
-		}
-
-		data, _ := json.Marshal(initialEvent)
-		fmt.Fprintf(w, "event: %s\n", initialEvent.EventType)
-		fmt.Fprintf(w, "data: %s\n\n", string(data))
-		w.(http.Flusher).Flush()
-	}
-	// -----------------------------------
-
-	// Listen for context cancellation or incoming events
-	for {
-		select {
-		case <-r.Context().Done():
-			return // Client disconnected
-		case event := <-listen:
-			data, err := json.Marshal(event)
-			if err != nil {
-				hr.logger.Error("failed to marshal guild SSE event", "error", err)
-				return
-			}
-			fmt.Fprintf(w, "event: %s\n", event.EventType)
-			fmt.Fprintf(w, "data: %s\n\n", string(data))
 			w.(http.Flusher).Flush()
 		}
 	}
