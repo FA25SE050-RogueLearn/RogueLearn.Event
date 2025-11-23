@@ -932,6 +932,11 @@ func (hr *HandlerRepo) SelectGuildMembersHandler(w http.ResponseWriter, r *http.
 	})
 }
 
+type EventGuildMemberResponse struct {
+	UserID     uuid.UUID `json:"user_id"`
+	SelectedAt time.Time `json:"selected_at"`
+}
+
 // GetEventGuildMembersHandler returns the list of selected members for a guild in an event
 func (hr *HandlerRepo) GetEventGuildMembersHandler(w http.ResponseWriter, r *http.Request) {
 	eventIDStr := chi.URLParam(r, "event_id")
@@ -970,9 +975,18 @@ func (hr *HandlerRepo) GetEventGuildMembersHandler(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Convert to response DTOs
+	responseDTOs := make([]EventGuildMemberResponse, 0, len(members))
+	for _, member := range members {
+		responseDTOs = append(responseDTOs, EventGuildMemberResponse{
+			UserID:     member.UserID.Bytes,
+			SelectedAt: member.SelectedAt.Time,
+		})
+	}
+
 	response.JSON(w, response.JSONResponseParameters{
 		Status:  http.StatusOK,
-		Data:    members,
+		Data:    responseDTOs,
 		Success: true,
 		Msg:     "Event guild members retrieved successfully",
 	})

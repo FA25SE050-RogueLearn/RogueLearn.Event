@@ -105,15 +105,6 @@ func main() {
 	} else {
 		fmt.Println("User profile:", profile)
 	}
-	resp, err := userClient.GrantAchievements(context.Background(), &protos.GrantAchievementsRequest{
-		UserAchievements: []*protos.UserAchievementGrant{
-			&protos.UserAchievementGrant{
-				UserId:         "335e0aa6-e538-45b6-bc7e-f725f1e2eddf",
-				AchievementKey: "code_battle_top_1",
-			},
-		},
-	})
-
 	// Create a context for background goroutines
 	ctx := context.Background()
 
