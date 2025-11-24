@@ -74,6 +74,7 @@ CREATE TABLE public.event_guild_participants (
   guild_id uuid NOT NULL,
   joined_at timestamp with time zone DEFAULT (now() AT TIME ZONE 'utc'::text),
   room_id uuid,
+  guild_name text,
   CONSTRAINT event_guild_participants_pkey PRIMARY KEY (guild_id, event_id),
   CONSTRAINT event_guild_participants_event_id_fkey FOREIGN KEY (event_id) REFERENCES public.events(id),
   CONSTRAINT event_guild_participants_room_id_fkey FOREIGN KEY (room_id) REFERENCES public.rooms(id)
@@ -110,7 +111,6 @@ WHERE status = 'pending';
 CREATE TABLE public.guild_leaderboard_entries (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   guild_id uuid NOT NULL,
-  guild_name text NOT NULL DEFAULT ''::text,
   event_id uuid NOT NULL,
   rank integer NOT NULL,
   total_score integer NOT NULL,

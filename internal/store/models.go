@@ -283,10 +283,11 @@ type EventGuildMember struct {
 }
 
 type EventGuildParticipant struct {
-	EventID  pgtype.UUID
-	GuildID  pgtype.UUID
-	JoinedAt pgtype.Timestamptz
-	RoomID   pgtype.UUID
+	EventID   pgtype.UUID
+	GuildID   pgtype.UUID
+	JoinedAt  pgtype.Timestamptz
+	RoomID    pgtype.UUID
+	GuildName pgtype.Text
 }
 
 type EventRequest struct {
@@ -311,7 +312,6 @@ type EventRequest struct {
 type GuildLeaderboardEntry struct {
 	ID           pgtype.UUID
 	GuildID      pgtype.UUID
-	GuildName    string
 	EventID      pgtype.UUID
 	Rank         int32
 	TotalScore   int32

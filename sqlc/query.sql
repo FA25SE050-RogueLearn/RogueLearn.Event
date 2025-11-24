@@ -40,6 +40,19 @@ OFFSET $3;
 SELECT COUNT(*) FROM events
 WHERE status = $1;
 
+-- name: GetEventsForNormalUsers :many
+-- Get events visible to normal users (pending, active, completed) with pagination
+SELECT * FROM events
+WHERE status IN ('pending', 'active', 'completed')
+ORDER BY started_date ASC
+LIMIT $1
+OFFSET $2;
+
+-- name: CountEventsForNormalUsers :one
+-- Count events visible to normal users (pending, active, completed)
+SELECT COUNT(*) FROM events
+WHERE status IN ('pending', 'active', 'completed');
+
 -- name: GetEventsByType :many
 SELECT * FROM events
 WHERE type = $1
@@ -401,8 +414,8 @@ WHERE event_id = $1 AND code_problem_id = $2;
 
 -- Event Guild Participants
 -- name: CreateEventGuildParticipant :one
-INSERT INTO event_guild_participants (event_id, guild_id, room_id)
-VALUES ($1, $2, $3)
+INSERT INTO event_guild_participants (event_id, guild_id, room_id, guild_name)
+VALUES ($1, $2, $3, $4)
 RETURNING *;
 
 -- name: GetEventGuildParticipant :one
@@ -555,9 +568,22 @@ VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 
 -- name: GetLeaderboardByEvent :many
-SELECT * FROM leaderboard_entries
-WHERE event_id = $1
-ORDER BY rank ASC;
+WITH user_guilds AS (
+  SELECT DISTINCT ON (rp.user_id)
+    rp.user_id,
+    rp.guild_id
+  FROM room_players rp
+  INNER JOIN rooms r ON rp.room_id = r.id
+  WHERE r.event_id = $1
+)
+SELECT
+  le.*,
+  COALESCE(egp.guild_name, '') as guild_name
+FROM leaderboard_entries le
+LEFT JOIN user_guilds ug ON ug.user_id = le.user_id
+LEFT JOIN event_guild_participants egp ON egp.event_id = le.event_id AND egp.guild_id = ug.guild_id
+WHERE le.event_id = $1
+ORDER BY le.rank ASC;
 
 -- name: GetLeaderboardByUser :many
 SELECT le.*, e.title as event_title
@@ -612,24 +638,36 @@ WHERE id = $1;
 
 -- Guild Leaderboard Entries
 -- name: CreateGuildLeaderboardEntry :one
-INSERT INTO guild_leaderboard_entries (guild_id, guild_name, event_id, rank, total_score)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO guild_leaderboard_entries (guild_id, event_id, rank, total_score)
+VALUES ($1, $2, $3, $4)
 RETURNING *;
 
 -- name: GetGuildLeaderboardByEvent :many
-SELECT * FROM guild_leaderboard_entries
-WHERE event_id = $1
-ORDER BY rank ASC;
+SELECT
+  gle.*,
+  COALESCE(egp.guild_name, '') as guild_name
+FROM guild_leaderboard_entries gle
+LEFT JOIN event_guild_participants egp ON egp.event_id = gle.event_id AND egp.guild_id = gle.guild_id
+WHERE gle.event_id = $1
+ORDER BY gle.rank ASC;
 
 -- name: GetGuildLeaderboardByGuild :many
-SELECT gle.*, e.title as event_title
+SELECT
+  gle.*,
+  e.title as event_title,
+  COALESCE(egp.guild_name, '') as guild_name
 FROM guild_leaderboard_entries gle
 JOIN events e ON gle.event_id = e.id
+LEFT JOIN event_guild_participants egp ON egp.event_id = gle.event_id AND egp.guild_id = gle.guild_id
 WHERE gle.guild_id = $1
 ORDER BY gle.snapshot_date DESC;
 
 -- name: GetLatestGuildLeaderboardByEvent :many
-SELECT * FROM guild_leaderboard_entries gle1
+SELECT
+  gle1.*,
+  COALESCE(egp.guild_name, '') as guild_name
+FROM guild_leaderboard_entries gle1
+LEFT JOIN event_guild_participants egp ON egp.event_id = gle1.event_id AND egp.guild_id = gle1.guild_id
 WHERE gle1.event_id = $1
 AND gle1.snapshot_date = (
     SELECT MAX(gle2.snapshot_date)
@@ -857,10 +895,9 @@ ranked_guilds AS (
     DENSE_RANK() OVER (ORDER BY total_score DESC) as rank
   FROM guild_scores
 )
-INSERT INTO guild_leaderboard_entries (guild_id, guild_name, event_id, rank, total_score, snapshot_date)
+INSERT INTO guild_leaderboard_entries (guild_id, event_id, rank, total_score, snapshot_date)
 SELECT
   rg.guild_id,
-  'Guild-' || rg.guild_id::text as guild_name,  -- TODO: Get actual guild name from guild service
   $1::uuid as event_id,
   rg.rank::integer,
   rg.total_score::integer,
@@ -897,12 +934,13 @@ WITH guild_scores AS (
   GROUP BY rp.guild_id
 )
 SELECT
-  guild_id,
-  'Guild-' || guild_id::text as guild_name,
-  total_score,
-  DENSE_RANK() OVER (ORDER BY total_score DESC) as rank
-FROM guild_scores
-ORDER BY total_score DESC
+  gs.guild_id,
+  COALESCE(egp.guild_name, '') as guild_name,
+  gs.total_score,
+  DENSE_RANK() OVER (ORDER BY gs.total_score DESC) as rank
+FROM guild_scores gs
+LEFT JOIN event_guild_participants egp ON egp.event_id = $1 AND egp.guild_id = gs.guild_id
+ORDER BY gs.total_score DESC
 LIMIT 3;
 
 -- name: GetEventStatistics :one

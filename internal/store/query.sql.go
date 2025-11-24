@@ -143,10 +143,9 @@ ranked_guilds AS (
     DENSE_RANK() OVER (ORDER BY total_score DESC) as rank
   FROM guild_scores
 )
-INSERT INTO guild_leaderboard_entries (guild_id, guild_name, event_id, rank, total_score, snapshot_date)
+INSERT INTO guild_leaderboard_entries (guild_id, event_id, rank, total_score, snapshot_date)
 SELECT
   rg.guild_id,
-  'Guild-' || rg.guild_id::text as guild_name,  -- TODO: Get actual guild name from guild service
   $1::uuid as event_id,
   rg.rank::integer,
   rg.total_score::integer,
@@ -334,6 +333,19 @@ func (q *Queries) CountEventsByStatus(ctx context.Context, status EventStatus) (
 	return count, err
 }
 
+const countEventsForNormalUsers = `-- name: CountEventsForNormalUsers :one
+SELECT COUNT(*) FROM events
+WHERE status IN ('pending', 'active', 'completed')
+`
+
+// Count events visible to normal users (pending, active, completed)
+func (q *Queries) CountEventsForNormalUsers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countEventsForNormalUsers)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countSubmissionsByUser = `-- name: CountSubmissionsByUser :one
 SELECT COUNT(*)
 FROM submissions s
@@ -516,26 +528,33 @@ func (q *Queries) CreateEventCodeProblem(ctx context.Context, arg CreateEventCod
 }
 
 const createEventGuildParticipant = `-- name: CreateEventGuildParticipant :one
-INSERT INTO event_guild_participants (event_id, guild_id, room_id)
-VALUES ($1, $2, $3)
-RETURNING event_id, guild_id, joined_at, room_id
+INSERT INTO event_guild_participants (event_id, guild_id, room_id, guild_name)
+VALUES ($1, $2, $3, $4)
+RETURNING event_id, guild_id, joined_at, room_id, guild_name
 `
 
 type CreateEventGuildParticipantParams struct {
-	EventID pgtype.UUID
-	GuildID pgtype.UUID
-	RoomID  pgtype.UUID
+	EventID   pgtype.UUID
+	GuildID   pgtype.UUID
+	RoomID    pgtype.UUID
+	GuildName pgtype.Text
 }
 
 // Event Guild Participants
 func (q *Queries) CreateEventGuildParticipant(ctx context.Context, arg CreateEventGuildParticipantParams) (EventGuildParticipant, error) {
-	row := q.db.QueryRow(ctx, createEventGuildParticipant, arg.EventID, arg.GuildID, arg.RoomID)
+	row := q.db.QueryRow(ctx, createEventGuildParticipant,
+		arg.EventID,
+		arg.GuildID,
+		arg.RoomID,
+		arg.GuildName,
+	)
 	var i EventGuildParticipant
 	err := row.Scan(
 		&i.EventID,
 		&i.GuildID,
 		&i.JoinedAt,
 		&i.RoomID,
+		&i.GuildName,
 	)
 	return i, err
 }
@@ -600,14 +619,13 @@ func (q *Queries) CreateEventRequest(ctx context.Context, arg CreateEventRequest
 }
 
 const createGuildLeaderboardEntry = `-- name: CreateGuildLeaderboardEntry :one
-INSERT INTO guild_leaderboard_entries (guild_id, guild_name, event_id, rank, total_score)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, guild_id, guild_name, event_id, rank, total_score, snapshot_date
+INSERT INTO guild_leaderboard_entries (guild_id, event_id, rank, total_score)
+VALUES ($1, $2, $3, $4)
+RETURNING id, guild_id, event_id, rank, total_score, snapshot_date
 `
 
 type CreateGuildLeaderboardEntryParams struct {
 	GuildID    pgtype.UUID
-	GuildName  string
 	EventID    pgtype.UUID
 	Rank       int32
 	TotalScore int32
@@ -617,7 +635,6 @@ type CreateGuildLeaderboardEntryParams struct {
 func (q *Queries) CreateGuildLeaderboardEntry(ctx context.Context, arg CreateGuildLeaderboardEntryParams) (GuildLeaderboardEntry, error) {
 	row := q.db.QueryRow(ctx, createGuildLeaderboardEntry,
 		arg.GuildID,
-		arg.GuildName,
 		arg.EventID,
 		arg.Rank,
 		arg.TotalScore,
@@ -626,7 +643,6 @@ func (q *Queries) CreateGuildLeaderboardEntry(ctx context.Context, arg CreateGui
 	err := row.Scan(
 		&i.ID,
 		&i.GuildID,
-		&i.GuildName,
 		&i.EventID,
 		&i.Rank,
 		&i.TotalScore,
@@ -1593,7 +1609,7 @@ func (q *Queries) GetEventGuildMembers(ctx context.Context, arg GetEventGuildMem
 }
 
 const getEventGuildParticipant = `-- name: GetEventGuildParticipant :one
-SELECT event_id, guild_id, joined_at, room_id FROM event_guild_participants
+SELECT event_id, guild_id, joined_at, room_id, guild_name FROM event_guild_participants
 WHERE event_id = $1 AND guild_id = $2
 `
 
@@ -1610,12 +1626,13 @@ func (q *Queries) GetEventGuildParticipant(ctx context.Context, arg GetEventGuil
 		&i.GuildID,
 		&i.JoinedAt,
 		&i.RoomID,
+		&i.GuildName,
 	)
 	return i, err
 }
 
 const getEventGuildParticipants = `-- name: GetEventGuildParticipants :many
-SELECT event_id, guild_id, joined_at, room_id FROM event_guild_participants
+SELECT event_id, guild_id, joined_at, room_id, guild_name FROM event_guild_participants
 WHERE event_id = $1
 ORDER BY joined_at ASC
 `
@@ -1634,6 +1651,7 @@ func (q *Queries) GetEventGuildParticipants(ctx context.Context, eventID pgtype.
 			&i.GuildID,
 			&i.JoinedAt,
 			&i.RoomID,
+			&i.GuildName,
 		); err != nil {
 			return nil, err
 		}
@@ -1646,7 +1664,7 @@ func (q *Queries) GetEventGuildParticipants(ctx context.Context, eventID pgtype.
 }
 
 const getEventParticipants = `-- name: GetEventParticipants :many
-SELECT event_id, guild_id, joined_at, room_id FROM event_guild_participants
+SELECT event_id, guild_id, joined_at, room_id, guild_name FROM event_guild_participants
 WHERE event_id = $1
 ORDER BY joined_at ASC
 `
@@ -1665,6 +1683,7 @@ func (q *Queries) GetEventParticipants(ctx context.Context, eventID pgtype.UUID)
 			&i.GuildID,
 			&i.JoinedAt,
 			&i.RoomID,
+			&i.GuildName,
 		); err != nil {
 			return nil, err
 		}
@@ -1964,6 +1983,52 @@ func (q *Queries) GetEventsByType(ctx context.Context, type_ EventType) ([]Event
 	return items, nil
 }
 
+const getEventsForNormalUsers = `-- name: GetEventsForNormalUsers :many
+SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, original_request_id, status, assignment_date FROM events
+WHERE status IN ('pending', 'active', 'completed')
+ORDER BY started_date ASC
+LIMIT $1
+OFFSET $2
+`
+
+type GetEventsForNormalUsersParams struct {
+	Limit  int32
+	Offset int32
+}
+
+// Get events visible to normal users (pending, active, completed) with pagination
+func (q *Queries) GetEventsForNormalUsers(ctx context.Context, arg GetEventsForNormalUsersParams) ([]Event, error) {
+	rows, err := q.db.Query(ctx, getEventsForNormalUsers, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Event
+	for rows.Next() {
+		var i Event
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Description,
+			&i.Type,
+			&i.StartedDate,
+			&i.EndDate,
+			&i.MaxGuilds,
+			&i.MaxPlayersPerGuild,
+			&i.OriginalRequestID,
+			&i.Status,
+			&i.AssignmentDate,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getExpiredActiveEvents = `-- name: GetExpiredActiveEvents :many
 SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, original_request_id, status, assignment_date FROM events
 WHERE status = 'active'
@@ -2007,28 +2072,42 @@ func (q *Queries) GetExpiredActiveEvents(ctx context.Context) ([]Event, error) {
 }
 
 const getGuildLeaderboardByEvent = `-- name: GetGuildLeaderboardByEvent :many
-SELECT id, guild_id, guild_name, event_id, rank, total_score, snapshot_date FROM guild_leaderboard_entries
-WHERE event_id = $1
-ORDER BY rank ASC
+SELECT
+  gle.id, gle.guild_id, gle.event_id, gle.rank, gle.total_score, gle.snapshot_date,
+  COALESCE(egp.guild_name, '') as guild_name
+FROM guild_leaderboard_entries gle
+LEFT JOIN event_guild_participants egp ON egp.event_id = gle.event_id AND egp.guild_id = gle.guild_id
+WHERE gle.event_id = $1
+ORDER BY gle.rank ASC
 `
 
-func (q *Queries) GetGuildLeaderboardByEvent(ctx context.Context, eventID pgtype.UUID) ([]GuildLeaderboardEntry, error) {
+type GetGuildLeaderboardByEventRow struct {
+	ID           pgtype.UUID
+	GuildID      pgtype.UUID
+	EventID      pgtype.UUID
+	Rank         int32
+	TotalScore   int32
+	SnapshotDate pgtype.Timestamptz
+	GuildName    string
+}
+
+func (q *Queries) GetGuildLeaderboardByEvent(ctx context.Context, eventID pgtype.UUID) ([]GetGuildLeaderboardByEventRow, error) {
 	rows, err := q.db.Query(ctx, getGuildLeaderboardByEvent, eventID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []GuildLeaderboardEntry
+	var items []GetGuildLeaderboardByEventRow
 	for rows.Next() {
-		var i GuildLeaderboardEntry
+		var i GetGuildLeaderboardByEventRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.GuildID,
-			&i.GuildName,
 			&i.EventID,
 			&i.Rank,
 			&i.TotalScore,
 			&i.SnapshotDate,
+			&i.GuildName,
 		); err != nil {
 			return nil, err
 		}
@@ -2041,9 +2120,13 @@ func (q *Queries) GetGuildLeaderboardByEvent(ctx context.Context, eventID pgtype
 }
 
 const getGuildLeaderboardByGuild = `-- name: GetGuildLeaderboardByGuild :many
-SELECT gle.id, gle.guild_id, gle.guild_name, gle.event_id, gle.rank, gle.total_score, gle.snapshot_date, e.title as event_title
+SELECT
+  gle.id, gle.guild_id, gle.event_id, gle.rank, gle.total_score, gle.snapshot_date,
+  e.title as event_title,
+  COALESCE(egp.guild_name, '') as guild_name
 FROM guild_leaderboard_entries gle
 JOIN events e ON gle.event_id = e.id
+LEFT JOIN event_guild_participants egp ON egp.event_id = gle.event_id AND egp.guild_id = gle.guild_id
 WHERE gle.guild_id = $1
 ORDER BY gle.snapshot_date DESC
 `
@@ -2051,12 +2134,12 @@ ORDER BY gle.snapshot_date DESC
 type GetGuildLeaderboardByGuildRow struct {
 	ID           pgtype.UUID
 	GuildID      pgtype.UUID
-	GuildName    string
 	EventID      pgtype.UUID
 	Rank         int32
 	TotalScore   int32
 	SnapshotDate pgtype.Timestamptz
 	EventTitle   string
+	GuildName    string
 }
 
 func (q *Queries) GetGuildLeaderboardByGuild(ctx context.Context, guildID pgtype.UUID) ([]GetGuildLeaderboardByGuildRow, error) {
@@ -2071,12 +2154,12 @@ func (q *Queries) GetGuildLeaderboardByGuild(ctx context.Context, guildID pgtype
 		if err := rows.Scan(
 			&i.ID,
 			&i.GuildID,
-			&i.GuildName,
 			&i.EventID,
 			&i.Rank,
 			&i.TotalScore,
 			&i.SnapshotDate,
 			&i.EventTitle,
+			&i.GuildName,
 		); err != nil {
 			return nil, err
 		}
@@ -2089,7 +2172,7 @@ func (q *Queries) GetGuildLeaderboardByGuild(ctx context.Context, guildID pgtype
 }
 
 const getGuildParticipantsByGuild = `-- name: GetGuildParticipantsByGuild :many
-SELECT event_id, guild_id, joined_at, room_id FROM event_guild_participants
+SELECT event_id, guild_id, joined_at, room_id, guild_name FROM event_guild_participants
 WHERE guild_id = $1
 ORDER BY joined_at DESC
 `
@@ -2108,6 +2191,7 @@ func (q *Queries) GetGuildParticipantsByGuild(ctx context.Context, guildID pgtyp
 			&i.GuildID,
 			&i.JoinedAt,
 			&i.RoomID,
+			&i.GuildName,
 		); err != nil {
 			return nil, err
 		}
@@ -2241,7 +2325,11 @@ func (q *Queries) GetLanguages(ctx context.Context, arg GetLanguagesParams) ([]L
 }
 
 const getLatestGuildLeaderboardByEvent = `-- name: GetLatestGuildLeaderboardByEvent :many
-SELECT id, guild_id, guild_name, event_id, rank, total_score, snapshot_date FROM guild_leaderboard_entries gle1
+SELECT
+  gle1.id, gle1.guild_id, gle1.event_id, gle1.rank, gle1.total_score, gle1.snapshot_date,
+  COALESCE(egp.guild_name, '') as guild_name
+FROM guild_leaderboard_entries gle1
+LEFT JOIN event_guild_participants egp ON egp.event_id = gle1.event_id AND egp.guild_id = gle1.guild_id
 WHERE gle1.event_id = $1
 AND gle1.snapshot_date = (
     SELECT MAX(gle2.snapshot_date)
@@ -2251,23 +2339,33 @@ AND gle1.snapshot_date = (
 ORDER BY gle1.rank ASC
 `
 
-func (q *Queries) GetLatestGuildLeaderboardByEvent(ctx context.Context, eventID pgtype.UUID) ([]GuildLeaderboardEntry, error) {
+type GetLatestGuildLeaderboardByEventRow struct {
+	ID           pgtype.UUID
+	GuildID      pgtype.UUID
+	EventID      pgtype.UUID
+	Rank         int32
+	TotalScore   int32
+	SnapshotDate pgtype.Timestamptz
+	GuildName    string
+}
+
+func (q *Queries) GetLatestGuildLeaderboardByEvent(ctx context.Context, eventID pgtype.UUID) ([]GetLatestGuildLeaderboardByEventRow, error) {
 	rows, err := q.db.Query(ctx, getLatestGuildLeaderboardByEvent, eventID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []GuildLeaderboardEntry
+	var items []GetLatestGuildLeaderboardByEventRow
 	for rows.Next() {
-		var i GuildLeaderboardEntry
+		var i GetLatestGuildLeaderboardByEventRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.GuildID,
-			&i.GuildName,
 			&i.EventID,
 			&i.Rank,
 			&i.TotalScore,
 			&i.SnapshotDate,
+			&i.GuildName,
 		); err != nil {
 			return nil, err
 		}
@@ -2319,20 +2417,44 @@ func (q *Queries) GetLatestLeaderboardByEvent(ctx context.Context, eventID pgtyp
 }
 
 const getLeaderboardByEvent = `-- name: GetLeaderboardByEvent :many
-SELECT id, user_id, username, event_id, rank, score, snapshot_date FROM leaderboard_entries
-WHERE event_id = $1
-ORDER BY rank ASC
+WITH user_guilds AS (
+  SELECT DISTINCT ON (rp.user_id)
+    rp.user_id,
+    rp.guild_id
+  FROM room_players rp
+  INNER JOIN rooms r ON rp.room_id = r.id
+  WHERE r.event_id = $1
+)
+SELECT
+  le.id, le.user_id, le.username, le.event_id, le.rank, le.score, le.snapshot_date,
+  COALESCE(egp.guild_name, '') as guild_name
+FROM leaderboard_entries le
+LEFT JOIN user_guilds ug ON ug.user_id = le.user_id
+LEFT JOIN event_guild_participants egp ON egp.event_id = le.event_id AND egp.guild_id = ug.guild_id
+WHERE le.event_id = $1
+ORDER BY le.rank ASC
 `
 
-func (q *Queries) GetLeaderboardByEvent(ctx context.Context, eventID pgtype.UUID) ([]LeaderboardEntry, error) {
+type GetLeaderboardByEventRow struct {
+	ID           pgtype.UUID
+	UserID       pgtype.UUID
+	Username     string
+	EventID      pgtype.UUID
+	Rank         int32
+	Score        int32
+	SnapshotDate pgtype.Timestamptz
+	GuildName    string
+}
+
+func (q *Queries) GetLeaderboardByEvent(ctx context.Context, eventID pgtype.UUID) ([]GetLeaderboardByEventRow, error) {
 	rows, err := q.db.Query(ctx, getLeaderboardByEvent, eventID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []LeaderboardEntry
+	var items []GetLeaderboardByEventRow
 	for rows.Next() {
-		var i LeaderboardEntry
+		var i GetLeaderboardByEventRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.UserID,
@@ -2341,6 +2463,7 @@ func (q *Queries) GetLeaderboardByEvent(ctx context.Context, eventID pgtype.UUID
 			&i.Rank,
 			&i.Score,
 			&i.SnapshotDate,
+			&i.GuildName,
 		); err != nil {
 			return nil, err
 		}
@@ -3235,18 +3358,19 @@ WITH guild_scores AS (
   GROUP BY rp.guild_id
 )
 SELECT
-  guild_id,
-  'Guild-' || guild_id::text as guild_name,
-  total_score,
-  DENSE_RANK() OVER (ORDER BY total_score DESC) as rank
-FROM guild_scores
-ORDER BY total_score DESC
+  gs.guild_id,
+  COALESCE(egp.guild_name, '') as guild_name,
+  gs.total_score,
+  DENSE_RANK() OVER (ORDER BY gs.total_score DESC) as rank
+FROM guild_scores gs
+LEFT JOIN event_guild_participants egp ON egp.event_id = $1 AND egp.guild_id = gs.guild_id
+ORDER BY gs.total_score DESC
 LIMIT 3
 `
 
 type GetTop3GuildsByEventRow struct {
 	GuildID    pgtype.UUID
-	GuildName  interface{}
+	GuildName  string
 	TotalScore int64
 	Rank       int64
 }
@@ -3671,7 +3795,7 @@ const updateEventGuildParticipantRoom = `-- name: UpdateEventGuildParticipantRoo
 UPDATE event_guild_participants
 SET room_id = $3
 WHERE event_id = $1 AND guild_id = $2
-RETURNING event_id, guild_id, joined_at, room_id
+RETURNING event_id, guild_id, joined_at, room_id, guild_name
 `
 
 type UpdateEventGuildParticipantRoomParams struct {
@@ -3688,6 +3812,7 @@ func (q *Queries) UpdateEventGuildParticipantRoom(ctx context.Context, arg Updat
 		&i.GuildID,
 		&i.JoinedAt,
 		&i.RoomID,
+		&i.GuildName,
 	)
 	return i, err
 }
@@ -3793,7 +3918,7 @@ const updateGuildLeaderboardEntry = `-- name: UpdateGuildLeaderboardEntry :one
 UPDATE guild_leaderboard_entries
 SET rank = $2, total_score = $3
 WHERE id = $1
-RETURNING id, guild_id, guild_name, event_id, rank, total_score, snapshot_date
+RETURNING id, guild_id, event_id, rank, total_score, snapshot_date
 `
 
 type UpdateGuildLeaderboardEntryParams struct {
@@ -3808,7 +3933,6 @@ func (q *Queries) UpdateGuildLeaderboardEntry(ctx context.Context, arg UpdateGui
 	err := row.Scan(
 		&i.ID,
 		&i.GuildID,
-		&i.GuildName,
 		&i.EventID,
 		&i.Rank,
 		&i.TotalScore,

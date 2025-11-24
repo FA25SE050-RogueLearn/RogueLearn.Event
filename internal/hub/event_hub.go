@@ -435,87 +435,14 @@ func (e *EventHub) grantAchievementsAsync(ctx context.Context, eventID uuid.UUID
 
 // buildEventExpiredMessage creates an enhanced EventExpired message with winners and statistics.
 // P2-1: Provides rich information to players about event results
-func (e *EventHub) buildEventExpiredMessage(ctx context.Context, eventID uuid.UUID) events.EventExpired {
-	// Base message
-	eventExpired := events.EventExpired{
-		EventID:     eventID,
-		CompletedAt: time.Now().UTC(),
-		Message:     "Event has ended. Thank you for participating!",
-		TopPlayers:  []events.TopPlayer{},
-		TopGuilds:   []events.TopGuild{},
-	}
-
-	// Fetch top 3 players
-	topPlayers, err := e.queries.GetTop3PlayersByEvent(ctx, toPgtypeUUID(eventID))
-	if err != nil {
-		e.logger.Warn("Failed to fetch top players for event expiry message",
-			"event_id", eventID,
-			"error", err)
-	} else {
-		for _, player := range topPlayers {
-			eventExpired.TopPlayers = append(eventExpired.TopPlayers, events.TopPlayer{
-				Rank:     int(player.Rank.Int32), // pgtype.Int4
-				UserID:   uuid.UUID(player.UserID.Bytes),
-				Username: player.Username,
-				Score:    int(player.Score),
-				RoomID:   uuid.UUID(player.RoomID.Bytes),
-			})
-		}
-		e.logger.Info("Added top players to event expiry message",
-			"event_id", eventID,
-			"count", len(eventExpired.TopPlayers))
-	}
-
-	// Fetch top 3 guilds
-	topGuilds, err := e.queries.GetTop3GuildsByEvent(ctx, toPgtypeUUID(eventID))
-	if err != nil {
-		e.logger.Warn("Failed to fetch top guilds for event expiry message",
-			"event_id", eventID,
-			"error", err)
-	} else {
-		for _, guild := range topGuilds {
-			// Extract guild name with type assertion (interface{} -> string)
-			guildName := ""
-			if guild.GuildName != nil {
-				guildName, _ = guild.GuildName.(string)
-			}
-
-			eventExpired.TopGuilds = append(eventExpired.TopGuilds, events.TopGuild{
-				Rank:       int(guild.Rank), // already int64
-				GuildID:    uuid.UUID(guild.GuildID.Bytes),
-				GuildName:  guildName,
-				TotalScore: int(guild.TotalScore),
-			})
-		}
-		e.logger.Info("Added top guilds to event expiry message",
-			"event_id", eventID,
-			"count", len(eventExpired.TopGuilds))
-	}
-
-	// Enhance message with winner information
-	if len(eventExpired.TopPlayers) > 0 {
-		winner := eventExpired.TopPlayers[0]
-		eventExpired.Message = fmt.Sprintf(
-			"Event has ended! Congratulations to %s for winning with %d points! Thank you all for participating!",
-			winner.Username,
-			winner.Score,
-		)
-	}
-
-	return eventExpired
-}
 
 // publishEventExpiredWithRetry publishes EventExpired message to RabbitMQ with exponential backoff retry.
 // This is a critical operation - if it fails, other instances won't be notified that event ended.
 // P0-2: Retry mechanism for RabbitMQ publish failures
 // P2-1: Enhanced with winners and statistics
 func (e *EventHub) publishEventExpiredWithRetry(ctx context.Context, eventID uuid.UUID) {
-	// P2-1: Build enhanced EventExpired message with winners and stats
-	eventExpired := e.buildEventExpiredMessage(ctx, eventID)
-
 	sseEvent := events.SseEvent{
 		EventType: events.EVENT_EXPIRED,
-		Data:      eventExpired,
 	}
 
 	// Marshal payload once (outside retry loop)
@@ -1774,6 +1701,7 @@ type RoomLeaderboardEntry struct {
 	PlayerName string `json:"player_name"`
 	Score      int32  `json:"score"`
 	Place      int32  `json:"place"`
+	State      string `json:"state"`
 }
 
 // calculateLeaderboard recalculates and updates player ranks in a transaction with row-level locking.
@@ -1853,6 +1781,7 @@ func (r *RoomHub) getRoomLeaderboardEntries(ctx context.Context) ([]RoomLeaderbo
 			PlayerName: rp.Username,
 			Score:      rp.Score,
 			Place:      rp.Place.Int32,
+			State:      string(rp.State),
 		})
 	}
 

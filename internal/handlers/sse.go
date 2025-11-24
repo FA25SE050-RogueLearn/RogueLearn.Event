@@ -23,6 +23,9 @@ var (
 	ErrGuildNotAssignedToRoom = errors.New("Guild is not assigned to this room.")
 	ErrEventEnded             = errors.New("Event has ended.")
 	ErrUserNotInSelectedList  = errors.New("User is not in the selected list.")
+	ErrInvalidRoom            = errors.New("Room is invalid")
+	ErrRoomIsFullOfConnection = errors.New("Room is full - too many connections")
+	ErrUserAlreadyInRoom      = errors.New("User is already in the room")
 )
 
 // SSE Event Handler for room's leaderboard
@@ -180,7 +183,7 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	// it will be loaded automatically. This is crucial for multi-instance deployments.
 	roomHub := hr.eventHub.GetOrCreateRoomHub(r.Context(), roomID)
 	if roomHub == nil {
-		http.Error(w, "room not found or not active", http.StatusNotFound)
+		hr.serverError(w, r, ErrInvalidRoom)
 		return
 	}
 
@@ -191,6 +194,15 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	roomHub.Mu.Lock()
 	if roomHub.Listerners == nil {
 		roomHub.Listerners = make(map[uuid.UUID]chan<- events.SseEvent)
+	} else { // room hub listener is not nill
+		if _, ok := roomHub.Listerners[userID]; ok {
+			roomHub.Mu.Unlock()
+			hr.logger.Debug("User already in room",
+				"user_id", userIDStr,
+				"room_id", roomID.String())
+			hr.conflict(w, r, ErrUserAlreadyInRoom)
+			return
+		}
 	}
 
 	// Check connection limit to prevent DoS attacks
@@ -201,7 +213,7 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 			"room_id", roomID,
 			"current_connections", len(roomHub.Listerners),
 			"max_connections", maxConnectionsPerRoom)
-		http.Error(w, "room is full - too many connections", http.StatusServiceUnavailable)
+		hr.badRequest(w, r, ErrRoomIsFullOfConnection)
 		return
 	}
 

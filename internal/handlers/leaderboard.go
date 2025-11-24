@@ -17,6 +17,7 @@ type UserLeaderboardResponse struct {
 type UserLeaderboardEntry struct {
 	UserID       string `json:"user_id"`
 	Username     string `json:"username"`
+	GuildName    string `json:"guild_name"`
 	Rank         int32  `json:"rank"`
 	Score        int32  `json:"score"`
 	SnapshotDate string `json:"snapshot_date"`
@@ -74,6 +75,7 @@ func (hr *HandlerRepo) getUserLeaderboard(w http.ResponseWriter, r *http.Request
 		entries = append(entries, UserLeaderboardEntry{
 			UserID:       entry.UserID.String(),
 			Username:     entry.Username,
+			GuildName:    entry.GuildName,
 			Rank:         entry.Rank,
 			Score:        entry.Score,
 			SnapshotDate: entry.SnapshotDate.Time.Format("2006-01-02T15:04:05Z07:00"),

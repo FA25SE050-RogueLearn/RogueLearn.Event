@@ -36,6 +36,7 @@ func (app *Application) routes() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(app.handlers.AuthMiddleware)
 			r.Get("/", app.handlers.GetEventsHandler)
+			r.Get("/{event_id}", app.handlers.GetEventDetailsHandler)
 			r.Get("/{event_id}/rooms", app.handlers.GetEventRoomsHandler)
 			r.Get("/{event_id}/problems", app.handlers.GetEventProblemsHandler)
 			r.Get("/{event_id}/leaderboards", app.handlers.GetEventLeaderboardHandler)

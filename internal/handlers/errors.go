@@ -87,3 +87,7 @@ func (hr *HandlerRepo) forbidden(w http.ResponseWriter, r *http.Request) {
 	message := "You do not have permission to access this resource"
 	hr.errorMessage(w, r, http.StatusForbidden, message, nil)
 }
+
+func (hr *HandlerRepo) conflict(w http.ResponseWriter, r *http.Request, err error) {
+	hr.errorMessage(w, r, http.StatusForbidden, err.Error(), nil)
+}

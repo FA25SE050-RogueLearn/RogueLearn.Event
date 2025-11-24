@@ -44,8 +44,8 @@ func (hr *HandlerRepo) GetEventsHandler(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		// Only Game Masters can filter by 'pending' or 'cancelled' status
-		restrictedStatuses := statusFilter == "pending" || statusFilter == "cancelled"
+		// Only Game Masters can filter 'cancelled' status
+		restrictedStatuses := statusFilter == "cancelled"
 		if restrictedStatuses && !isGameMaster {
 			hr.forbidden(w, r)
 			return
@@ -78,52 +78,27 @@ func (hr *HandlerRepo) GetEventsHandler(w http.ResponseWriter, r *http.Request) 
 		}
 	} else {
 		// No status filter provided
-		// Normal users: only show 'active' and 'completed' events
+		// Normal users: only show 'pending', 'active' and 'completed' events
 		// Game Masters: show all events
 		if !isGameMaster {
-			// For normal users without status filter, only return active and completed events
-			// We need to get them separately and combine
-			activeEvents, err := hr.queries.GetEventsByStatus(r.Context(), store.GetEventsByStatusParams{
-				Status: store.EventStatusActive,
+			// For normal users without status filter, only return pending, active and completed events
+			// Use a single query with hardcoded statuses to ensure correct pagination
+			totalCount, err = hr.queries.CountEventsForNormalUsers(r.Context())
+			if err != nil {
+				hr.logger.Error("failed to count events for normal users", "err", err)
+				hr.serverError(w, r, err)
+				return
+			}
+
+			events, err = hr.queries.GetEventsForNormalUsers(r.Context(), store.GetEventsForNormalUsersParams{
 				Limit:  pagination.Limit,
 				Offset: pagination.Offset,
 			})
 			if err != nil {
-				hr.logger.Error("failed to get active events", "err", err)
+				hr.logger.Error("failed to get events for normal users", "err", err)
 				hr.serverError(w, r, err)
 				return
 			}
-
-			completedEvents, err := hr.queries.GetEventsByStatus(r.Context(), store.GetEventsByStatusParams{
-				Status: store.EventStatusCompleted,
-				Limit:  pagination.Limit,
-				Offset: pagination.Offset,
-			})
-			if err != nil {
-				hr.logger.Error("failed to get completed events", "err", err)
-				hr.serverError(w, r, err)
-				return
-			}
-
-			// Combine results
-			events = append(activeEvents, completedEvents...)
-
-			// Get combined count
-			activeCount, err := hr.queries.CountEventsByStatus(r.Context(), store.EventStatusActive)
-			if err != nil {
-				hr.logger.Error("failed to count active events", "err", err)
-				hr.serverError(w, r, err)
-				return
-			}
-
-			completedCount, err := hr.queries.CountEventsByStatus(r.Context(), store.EventStatusCompleted)
-			if err != nil {
-				hr.logger.Error("failed to count completed events", "err", err)
-				hr.serverError(w, r, err)
-				return
-			}
-
-			totalCount = activeCount + completedCount
 		} else {
 			// Game Master: show all events
 			totalCount, err = hr.queries.CountEvents(r.Context())
@@ -198,6 +173,90 @@ type DifficultyDistribution struct {
 type ProcessRequestPayload struct {
 	Action          string `json:"action"` // "approve" or "decline"
 	RejectionReason string `json:"rejection_reason,omitempty"`
+}
+
+type EventDetailsResponse struct {
+	ID                  uuid.UUID  `json:"id"`
+	Title               string     `json:"title"`
+	Description         string     `json:"description"`
+	Type                string     `json:"type"`
+	StartedDate         time.Time  `json:"started_date"`
+	EndDate             time.Time  `json:"end_date"`
+	MaxGuilds           *int32     `json:"max_guilds"`
+	MaxPlayersPerGuild  *int32     `json:"max_players_per_guild"`
+	Status              string     `json:"status"`
+	AssignmentDate      *time.Time `json:"assignment_date,omitempty"`
+	GuildsLeft          *int32     `json:"guilds_left"`
+	CurrentParticipants int64      `json:"current_participants"`
+}
+
+func (hr *HandlerRepo) GetEventDetailsHandler(w http.ResponseWriter, r *http.Request) {
+	eventIDStr := chi.URLParam(r, "event_id")
+	eventID, err := uuid.Parse(eventIDStr)
+	if err != nil {
+		hr.badRequest(w, r, errors.New("invalid event ID format"))
+		return
+	}
+
+	// Get the event details
+	event, err := hr.queries.GetEventByID(r.Context(), toPgtypeUUID(eventID))
+	if err == pgx.ErrNoRows {
+		hr.logger.Info("event not found", "event_id", eventID)
+		hr.notFound(w, r)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to get event", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Count current participants
+	participantCount, err := hr.queries.CountEventParticipants(r.Context(), event.ID)
+	if err != nil {
+		hr.logger.Error("failed to count event participants", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Build response with guilds_left calculation
+	eventDetails := EventDetailsResponse{
+		ID:                  event.ID.Bytes,
+		Title:               event.Title,
+		Description:         event.Description,
+		Type:                string(event.Type),
+		StartedDate:         event.StartedDate.Time,
+		EndDate:             event.EndDate.Time,
+		Status:              string(event.Status),
+		CurrentParticipants: participantCount,
+	}
+
+	// Add optional fields
+	if event.MaxGuilds.Valid {
+		eventDetails.MaxGuilds = &event.MaxGuilds.Int32
+		guildsLeft := event.MaxGuilds.Int32 - int32(participantCount)
+		if guildsLeft < 0 {
+			guildsLeft = 0
+		}
+		eventDetails.GuildsLeft = &guildsLeft
+	}
+
+	if event.MaxPlayersPerGuild.Valid {
+		eventDetails.MaxPlayersPerGuild = &event.MaxPlayersPerGuild.Int32
+	}
+
+	if event.AssignmentDate.Valid {
+		eventDetails.AssignmentDate = &event.AssignmentDate.Time
+	}
+
+	err = response.JSON(w, response.JSONResponseParameters{
+		Status:  http.StatusOK,
+		Data:    eventDetails,
+		Success: true,
+		Msg:     "Event details retrieved successfully",
+	})
+	if err != nil {
+		hr.serverError(w, r, err)
+	}
 }
 
 // CreateEventHandler handles the submission of a new event creation request.
@@ -716,11 +775,28 @@ func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventR
 
 	// Note: Rooms will be created dynamically at assignment time based on the number of guilds that joined
 
+	// Fetch guild name for the requester's guild via gRPC
+	requesterGuildID := uuid.UUID(req.RequesterGuildID.Bytes)
+	requesterGuildInfo, err := hr.userClient.GetGuildById(ctx, &protos.GetGuildByIdRequest{
+		GuildId: requesterGuildID.String(),
+	})
+	if err != nil {
+		hr.logger.Warn("failed to fetch requester guild name via gRPC, will use empty name",
+			"guild_id", requesterGuildID,
+			"error", err)
+	}
+
+	requesterGuildName := ""
+	if requesterGuildInfo != nil && requesterGuildInfo.Name != "" {
+		requesterGuildName = requesterGuildInfo.Name
+	}
+
 	// Register the requester's guild
 	_, err = qtx.CreateEventGuildParticipant(ctx, store.CreateEventGuildParticipantParams{
-		EventID: event.ID,
-		GuildID: req.RequesterGuildID,
-		RoomID:  pgtype.UUID{Valid: false}, // Room assignment happens at event start time
+		EventID:   event.ID,
+		GuildID:   req.RequesterGuildID,
+		RoomID:    pgtype.UUID{Valid: false}, // Room assignment happens at event start time
+		GuildName: pgtype.Text{String: requesterGuildName, Valid: requesterGuildName != ""},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to add requester guild to event: %w", err)
