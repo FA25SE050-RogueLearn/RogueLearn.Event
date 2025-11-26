@@ -1293,13 +1293,15 @@ func (hr *HandlerRepo) LeaveRoomHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Delete the room_player record (user is deliberately leaving)
-	err = hr.queries.DeleteRoomPlayer(r.Context(), store.DeleteRoomPlayerParams{
+	// Update the room_player state to 'left' (user is deliberately leaving)
+	// We don't delete the record to maintain history and prevent rejoining
+	_, err = hr.queries.UpdateRoomPlayerState(r.Context(), store.UpdateRoomPlayerStateParams{
 		RoomID: toPgtypeUUID(roomID),
 		UserID: toPgtypeUUID(userID),
+		State:  store.RoomPlayerStateLeft,
 	})
 	if err != nil {
-		hr.logger.Error("failed to delete room player", "err", err)
+		hr.logger.Error("failed to update room player state to left", "err", err)
 		hr.serverError(w, r, err)
 		return
 	}

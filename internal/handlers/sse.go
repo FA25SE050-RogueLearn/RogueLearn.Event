@@ -26,6 +26,7 @@ var (
 	ErrInvalidRoom            = errors.New("Room is invalid")
 	ErrRoomIsFullOfConnection = errors.New("Room is full - too many connections")
 	ErrUserAlreadyInRoom      = errors.New("User is already in the room")
+	ErrPlayerLeftRoom         = errors.New("Player has left the room and cannot rejoin")
 )
 
 // SSE Event Handler for room's leaderboard
@@ -177,6 +178,31 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
+	w.Header().Set("X-Accel-Buffering", "no") // Helps with Nginx/Traefik proxies
+
+	// Check if player has previously left the room (state = 'left')
+	// Players who explicitly left cannot rejoin
+	existingPlayer, err := hr.queries.GetRoomPlayer(r.Context(), store.GetRoomPlayerParams{
+		RoomID: toPgtypeUUID(roomID),
+		UserID: toPgtypeUUID(userID),
+	})
+	if err == nil {
+		// Player record exists, check if they left
+		if existingPlayer.State == store.RoomPlayerStateLeft {
+			hr.logger.Warn("player previously left the room and cannot rejoin",
+				"user_id", userID,
+				"room_id", roomID,
+				"state", existingPlayer.State)
+			hr.badRequest(w, r, ErrPlayerLeftRoom)
+			return
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		// Unexpected error (not just "no rows")
+		hr.logger.Error("failed to check room player state", "error", err)
+		hr.serverError(w, r, err)
+		return
+	}
+	// If err == pgx.ErrNoRows, player hasn't joined before, which is fine
 
 	// Get or create the room manager for the requested room.
 	// This supports lazy-loading: if the room exists in DB but not in memory,
@@ -243,11 +269,29 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 		EventEndTime:  event.EndDate.Time,
 	}
 
+	// Heartbeat ticker to detect disconnections faster
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-r.Context().Done():
 			hr.logger.Info("SSE client disconnected", "userID", userID, "room_id", roomID)
 			return
+		case <-ticker.C:
+			// Send heartbeat comment (clients ignore comments starting with ':')
+			// If this write fails, the connection is broken
+			_, err := fmt.Fprintf(w, ": heartbeat\n\n")
+			if err != nil {
+				hr.logger.Info("SSE heartbeat failed - client disconnected", "userID", userID, "room_id", roomID, "error", err)
+				return
+			}
+			flusher, ok := w.(http.Flusher)
+			if !ok {
+				hr.logger.Error("ResponseWriter is not a Flusher", "userID", userID)
+				return
+			}
+			flusher.Flush()
 		case event, ok := <-listen:
 			if !ok {
 				hr.logger.Info("SSE client disconnected", "userID", userID, "room_id", roomID)
@@ -287,14 +331,4 @@ func getRequestEventIDAndRoomID(r *http.Request) (eventID, roomID uuid.UUID, err
 	}
 
 	return eventIDUID, roomIDUID, nil
-}
-
-// formatDuration formats a duration as HH:MM:SS
-func formatDuration(d time.Duration) string {
-	totalSeconds := int(d.Seconds())
-	hours := totalSeconds / 3600
-	minutes := (totalSeconds % 3600) / 60
-	seconds := totalSeconds % 60
-
-	return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 }
