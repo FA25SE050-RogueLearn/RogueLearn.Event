@@ -42,6 +42,7 @@ func (app *Application) routes() http.Handler {
 			r.Get("/{event_id}/leaderboards", app.handlers.GetEventLeaderboardHandler)
 			r.Get("/{event_id}/rooms/{room_id}/sse", app.handlers.JoinRoomHandler)
 			r.Post("/{event_id}/rooms/{room_id}/submit", app.handlers.SubmitInRoomHandler)
+			r.Delete("/{event_id}/rooms/{room_id}/leave", app.handlers.LeaveRoomHandler)
 
 			r.With(app.handlers.GuildMasterOnly).Post("/{event_id}/register", app.handlers.RegisterGuildToEventHandler)
 			r.With(app.handlers.GuildMasterOnly).Get("/{event_id}/guilds/members", app.handlers.GetEventGuildMembersHandler)

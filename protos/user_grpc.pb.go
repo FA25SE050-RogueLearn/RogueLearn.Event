@@ -706,13 +706,16 @@ var AchievementsService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	GuildsService_GetGuildById_FullMethodName      = "/user.v1.GuildsService/GetGuildById"
-	GuildsService_GetAllGuilds_FullMethodName      = "/user.v1.GuildsService/GetAllGuilds"
-	GuildsService_GetInvitations_FullMethodName    = "/user.v1.GuildsService/GetInvitations"
-	GuildsService_GetJoinRequests_FullMethodName   = "/user.v1.GuildsService/GetJoinRequests"
-	GuildsService_GetMemberRoles_FullMethodName    = "/user.v1.GuildsService/GetMemberRoles"
-	GuildsService_GetMyGuild_FullMethodName        = "/user.v1.GuildsService/GetMyGuild"
-	GuildsService_GetMyJoinRequests_FullMethodName = "/user.v1.GuildsService/GetMyJoinRequests"
+	GuildsService_GetGuildById_FullMethodName                   = "/user.v1.GuildsService/GetGuildById"
+	GuildsService_GetAllGuilds_FullMethodName                   = "/user.v1.GuildsService/GetAllGuilds"
+	GuildsService_GetInvitations_FullMethodName                 = "/user.v1.GuildsService/GetInvitations"
+	GuildsService_GetJoinRequests_FullMethodName                = "/user.v1.GuildsService/GetJoinRequests"
+	GuildsService_GetMemberRoles_FullMethodName                 = "/user.v1.GuildsService/GetMemberRoles"
+	GuildsService_GetMyGuild_FullMethodName                     = "/user.v1.GuildsService/GetMyGuild"
+	GuildsService_GetMyJoinRequests_FullMethodName              = "/user.v1.GuildsService/GetMyJoinRequests"
+	GuildsService_UpdateMemberContributionPoints_FullMethodName = "/user.v1.GuildsService/UpdateMemberContributionPoints"
+	GuildsService_UpdateGuildMeritPoints_FullMethodName         = "/user.v1.GuildsService/UpdateGuildMeritPoints"
+	GuildsService_GrantGuildAchievement_FullMethodName          = "/user.v1.GuildsService/GrantGuildAchievement"
 )
 
 // GuildsServiceClient is the client API for GuildsService service.
@@ -726,6 +729,9 @@ type GuildsServiceClient interface {
 	GetMemberRoles(ctx context.Context, in *GetGuildMemberRolesRequest, opts ...grpc.CallOption) (*GuildMemberRoleList, error)
 	GetMyGuild(ctx context.Context, in *GetMyGuildRequest, opts ...grpc.CallOption) (*Guild, error)
 	GetMyJoinRequests(ctx context.Context, in *GetMyJoinRequestsRequest, opts ...grpc.CallOption) (*GuildJoinRequestList, error)
+	UpdateMemberContributionPoints(ctx context.Context, in *UpdateMemberContributionPointsRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	UpdateGuildMeritPoints(ctx context.Context, in *UpdateGuildMeritPointsRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GrantGuildAchievement(ctx context.Context, in *GrantGuildAchievementRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type guildsServiceClient struct {
@@ -806,6 +812,36 @@ func (c *guildsServiceClient) GetMyJoinRequests(ctx context.Context, in *GetMyJo
 	return out, nil
 }
 
+func (c *guildsServiceClient) UpdateMemberContributionPoints(ctx context.Context, in *UpdateMemberContributionPointsRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, GuildsService_UpdateMemberContributionPoints_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *guildsServiceClient) UpdateGuildMeritPoints(ctx context.Context, in *UpdateGuildMeritPointsRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, GuildsService_UpdateGuildMeritPoints_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *guildsServiceClient) GrantGuildAchievement(ctx context.Context, in *GrantGuildAchievementRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, GuildsService_GrantGuildAchievement_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GuildsServiceServer is the server API for GuildsService service.
 // All implementations must embed UnimplementedGuildsServiceServer
 // for forward compatibility.
@@ -817,6 +853,9 @@ type GuildsServiceServer interface {
 	GetMemberRoles(context.Context, *GetGuildMemberRolesRequest) (*GuildMemberRoleList, error)
 	GetMyGuild(context.Context, *GetMyGuildRequest) (*Guild, error)
 	GetMyJoinRequests(context.Context, *GetMyJoinRequestsRequest) (*GuildJoinRequestList, error)
+	UpdateMemberContributionPoints(context.Context, *UpdateMemberContributionPointsRequest) (*emptypb.Empty, error)
+	UpdateGuildMeritPoints(context.Context, *UpdateGuildMeritPointsRequest) (*emptypb.Empty, error)
+	GrantGuildAchievement(context.Context, *GrantGuildAchievementRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedGuildsServiceServer()
 }
 
@@ -847,6 +886,15 @@ func (UnimplementedGuildsServiceServer) GetMyGuild(context.Context, *GetMyGuildR
 }
 func (UnimplementedGuildsServiceServer) GetMyJoinRequests(context.Context, *GetMyJoinRequestsRequest) (*GuildJoinRequestList, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetMyJoinRequests not implemented")
+}
+func (UnimplementedGuildsServiceServer) UpdateMemberContributionPoints(context.Context, *UpdateMemberContributionPointsRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateMemberContributionPoints not implemented")
+}
+func (UnimplementedGuildsServiceServer) UpdateGuildMeritPoints(context.Context, *UpdateGuildMeritPointsRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateGuildMeritPoints not implemented")
+}
+func (UnimplementedGuildsServiceServer) GrantGuildAchievement(context.Context, *GrantGuildAchievementRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GrantGuildAchievement not implemented")
 }
 func (UnimplementedGuildsServiceServer) mustEmbedUnimplementedGuildsServiceServer() {}
 func (UnimplementedGuildsServiceServer) testEmbeddedByValue()                       {}
@@ -995,6 +1043,60 @@ func _GuildsService_GetMyJoinRequests_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GuildsService_UpdateMemberContributionPoints_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateMemberContributionPointsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GuildsServiceServer).UpdateMemberContributionPoints(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GuildsService_UpdateMemberContributionPoints_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GuildsServiceServer).UpdateMemberContributionPoints(ctx, req.(*UpdateMemberContributionPointsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GuildsService_UpdateGuildMeritPoints_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateGuildMeritPointsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GuildsServiceServer).UpdateGuildMeritPoints(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GuildsService_UpdateGuildMeritPoints_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GuildsServiceServer).UpdateGuildMeritPoints(ctx, req.(*UpdateGuildMeritPointsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GuildsService_GrantGuildAchievement_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantGuildAchievementRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GuildsServiceServer).GrantGuildAchievement(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GuildsService_GrantGuildAchievement_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GuildsServiceServer).GrantGuildAchievement(ctx, req.(*GrantGuildAchievementRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GuildsService_ServiceDesc is the grpc.ServiceDesc for GuildsService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1029,6 +1131,18 @@ var GuildsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetMyJoinRequests",
 			Handler:    _GuildsService_GetMyJoinRequests_Handler,
+		},
+		{
+			MethodName: "UpdateMemberContributionPoints",
+			Handler:    _GuildsService_UpdateMemberContributionPoints_Handler,
+		},
+		{
+			MethodName: "UpdateGuildMeritPoints",
+			Handler:    _GuildsService_UpdateGuildMeritPoints_Handler,
+		},
+		{
+			MethodName: "GrantGuildAchievement",
+			Handler:    _GuildsService_GrantGuildAchievement_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

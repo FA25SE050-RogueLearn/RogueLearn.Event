@@ -24,6 +24,11 @@ ORDER BY started_date ASC
 LIMIT $1
 OFFSET $2;
 
+-- name: GetEventRequesterIDByEventID :one
+SELECT event_requests.requester_guild_id FROM events
+JOIN event_requests ON events.original_request_id = event_requests.id
+WHERE events.id = $1;
+
 -- name: CountEvents :one
 SELECT COUNT(*) FROM events;
 
@@ -859,6 +864,7 @@ WHERE rp.room_id = lp.room_id AND rp.user_id = lp.user_id;
 -- Capture final leaderboard snapshot for all rooms in an event
 -- This creates a permanent historical record of final rankings and scores
 -- Called when event completes to preserve winner information
+-- Includes ALL states (present, completed, disconnected, and left)
 INSERT INTO leaderboard_entries (user_id, username, event_id, rank, score, snapshot_date)
 SELECT
   rp.user_id,
@@ -870,13 +876,13 @@ SELECT
 FROM room_players rp
 INNER JOIN rooms r ON rp.room_id = r.id
 WHERE r.event_id = $1
-  AND rp.state IN ('completed'::room_player_state, 'present'::room_player_state)
 ORDER BY rp.score DESC, rp.joined_at ASC;
 
 -- name: CaptureFinalGuildLeaderboard :exec
 -- Capture final guild leaderboard snapshot for an event
 -- Calculates total scores by summing all players from each guild
 -- Creates permanent record of which guild won
+-- Includes ALL states (present, completed, disconnected, and left)
 WITH guild_scores AS (
   SELECT
     rp.guild_id,
@@ -885,7 +891,6 @@ WITH guild_scores AS (
   FROM room_players rp
   INNER JOIN rooms r ON rp.room_id = r.id
   WHERE r.event_id = $1
-    AND rp.state IN ('completed'::room_player_state, 'present'::room_player_state)
   GROUP BY rp.guild_id
 ),
 ranked_guilds AS (
@@ -907,6 +912,7 @@ FROM ranked_guilds rg;
 -- name: GetTop3PlayersByEvent :many
 -- Get top 3 players across all rooms in an event
 -- P2-1: Used to populate EventExpired message with winners
+-- Includes ALL states (present, completed, disconnected, and left)
 SELECT
   rp.user_id,
   rp.username,
@@ -916,13 +922,25 @@ SELECT
 FROM room_players rp
 INNER JOIN rooms r ON rp.room_id = r.id
 WHERE r.event_id = $1
-  AND rp.state IN ('completed'::room_player_state, 'present'::room_player_state)
 ORDER BY rp.score DESC, rp.joined_at ASC
 LIMIT 3;
 
--- name: GetTop3GuildsByEvent :many
--- Get top 3 guilds by total score for an event
--- P2-1: Used to populate EventExpired message with winning guilds
+-- name: GetAllPlayersByEvent :many
+-- Get all players across all rooms in an event for granting achievements and contribution points
+-- Includes ALL states (present, completed, disconnected, and left)
+SELECT
+  rp.user_id,
+  rp.username,
+  rp.guild_id,
+  rp.score
+FROM room_players rp
+INNER JOIN rooms r ON rp.room_id = r.id
+WHERE r.event_id = $1
+ORDER BY rp.score DESC, rp.joined_at ASC;
+
+-- name: GetAllGuildsByEvent :many
+-- Get all guilds that participated in an event with their total scores for merit point granting
+-- Includes ALL states (present, completed, disconnected, and left)
 WITH guild_scores AS (
   SELECT
     rp.guild_id,
@@ -930,7 +948,25 @@ WITH guild_scores AS (
   FROM room_players rp
   INNER JOIN rooms r ON rp.room_id = r.id
   WHERE r.event_id = $1
-    AND rp.state IN ('completed'::room_player_state, 'present'::room_player_state)
+  GROUP BY rp.guild_id
+)
+SELECT
+  gs.guild_id,
+  gs.total_score
+FROM guild_scores gs
+ORDER BY gs.total_score DESC;
+
+-- name: GetTop3GuildsByEvent :many
+-- Get top 3 guilds by total score for an event
+-- P2-1: Used to populate EventExpired message with winning guilds
+-- Includes ALL states (present, completed, disconnected, and left)
+WITH guild_scores AS (
+  SELECT
+    rp.guild_id,
+    SUM(rp.score) as total_score
+  FROM room_players rp
+  INNER JOIN rooms r ON rp.room_id = r.id
+  WHERE r.event_id = $1
   GROUP BY rp.guild_id
 )
 SELECT
@@ -946,6 +982,7 @@ LIMIT 3;
 -- name: GetEventStatistics :one
 -- Get aggregate statistics for an event
 -- P2-1: Used to populate EventExpired message with event stats
+-- Includes ALL states (present, completed, disconnected, and left)
 WITH event_rooms AS (
   SELECT id FROM rooms WHERE event_id = $1
 ),
@@ -956,7 +993,6 @@ player_stats AS (
     COALESCE(MAX(rp.score), 0) as highest_score
   FROM room_players rp
   WHERE rp.room_id IN (SELECT id FROM event_rooms)
-    AND rp.state IN ('completed'::room_player_state, 'present'::room_player_state)
 ),
 submission_stats AS (
   SELECT

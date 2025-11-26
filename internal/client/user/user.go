@@ -142,3 +142,15 @@ func (c *Client) GetMyJoinRequests(ctx context.Context, req *pb.GetMyJoinRequest
 func (c *Client) GrantAchievements(ctx context.Context, req *pb.GrantAchievementsRequest) (*pb.GrantAchievementsResponse, error) {
 	return c.achievementsClient.GrantAchievements(ctx, req)
 }
+
+func (c *Client) UpdateMemberContributionPoints(ctx context.Context, req *pb.UpdateMemberContributionPointsRequest) (*emptypb.Empty, error) {
+	return c.guildsClient.UpdateMemberContributionPoints(ctx, req)
+}
+
+func (c *Client) UpdateGuildMeritPoints(ctx context.Context, req *pb.UpdateGuildMeritPointsRequest) (*emptypb.Empty, error) {
+	return c.guildsClient.UpdateGuildMeritPoints(ctx, req)
+}
+
+func (c *Client) GrantGuildAchievement(ctx context.Context, req *pb.GrantGuildAchievementRequest) (*emptypb.Empty, error) {
+	return c.guildsClient.GrantGuildAchievement(ctx, req)
+}

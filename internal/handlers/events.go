@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/events"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/store"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/request"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/response"
@@ -17,6 +18,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+)
+
+var (
+	ErrGuildMemberRegisteredFull = errors.New("Guild member registered reached limit")
 )
 
 func (hr *HandlerRepo) GetEventsHandler(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +182,7 @@ type ProcessRequestPayload struct {
 
 type EventDetailsResponse struct {
 	ID                  uuid.UUID  `json:"id"`
+	RequesterGuildID    uuid.UUID  `json:"requester_guild_id"`
 	Title               string     `json:"title"`
 	Description         string     `json:"description"`
 	Type                string     `json:"type"`
@@ -218,9 +224,21 @@ func (hr *HandlerRepo) GetEventDetailsHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	requesterGuildID, err := hr.queries.GetEventRequesterIDByEventID(r.Context(), toPgtypeUUID(eventID))
+	if err == pgx.ErrNoRows {
+		hr.logger.Debug("requester_id not found")
+		hr.notFound(w, r)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to get event requester ID", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
 	// Build response with guilds_left calculation
 	eventDetails := EventDetailsResponse{
 		ID:                  event.ID.Bytes,
+		RequesterGuildID:    requesterGuildID.Bytes,
 		Title:               event.Title,
 		Description:         event.Description,
 		Type:                string(event.Type),
@@ -930,9 +948,16 @@ func (hr *HandlerRepo) SelectGuildMembersHandler(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// validation
 	// Verify event is in pending status (members can only be selected before event starts)
 	if event.Status != store.EventStatusPending {
 		hr.badRequest(w, r, errors.New("cannot select members for event that has already started"))
+		return
+	}
+
+	// Verify member count doesn't exceed max_players_per_guild
+	if event.MaxPlayersPerGuild.Valid && len(req.Members) > int(event.MaxPlayersPerGuild.Int32) {
+		hr.badRequest(w, r, fmt.Errorf("cannot select more than %d members", event.MaxPlayersPerGuild.Int32))
 		return
 	}
 
@@ -946,12 +971,6 @@ func (hr *HandlerRepo) SelectGuildMembersHandler(w http.ResponseWriter, r *http.
 		return
 	} else if err != nil {
 		hr.serverError(w, r, err)
-		return
-	}
-
-	// Verify member count doesn't exceed max_players_per_guild
-	if event.MaxPlayersPerGuild.Valid && len(req.Members) > int(event.MaxPlayersPerGuild.Int32) {
-		hr.badRequest(w, r, fmt.Errorf("cannot select more than %d members", event.MaxPlayersPerGuild.Int32))
 		return
 	}
 
@@ -1206,4 +1225,112 @@ func toEventRequestResponse(req store.EventRequest) (EventRequestResponse, error
 		RequesterGuildID:     req.RequesterGuildID.Bytes,
 		Notes:                req.Notes.String,
 	}, nil
+}
+
+// LeaveRoomHandler handles a user deliberately leaving a room.
+// This is different from SSE disconnection - the user is explicitly leaving,
+// so we delete the room_player record instead of just updating the state.
+// However, we still send a PlayerLeft event to the room for real-time notification.
+func (hr *HandlerRepo) LeaveRoomHandler(w http.ResponseWriter, r *http.Request) {
+	eventIDStr := chi.URLParam(r, "event_id")
+	eventID, err := uuid.Parse(eventIDStr)
+	if err != nil {
+		hr.badRequest(w, r, errors.New("invalid event ID format"))
+		return
+	}
+
+	roomIDStr := chi.URLParam(r, "room_id")
+	roomID, err := uuid.Parse(roomIDStr)
+	if err != nil {
+		hr.badRequest(w, r, errors.New("invalid room ID format"))
+		return
+	}
+
+	// Get user claims from JWT
+	userClaims, err := GetUserClaims(r.Context())
+	if err != nil {
+		hr.logger.Debug("Invalid claims", "err", err)
+		hr.unauthorized(w, r)
+		return
+	}
+
+	userID, err := uuid.Parse(userClaims.Sub)
+	if err != nil {
+		hr.logger.Error("failed to parse user ID from claims", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Verify the room exists and belongs to the event
+	room, err := hr.queries.GetRoomByID(r.Context(), toPgtypeUUID(roomID))
+	if err == pgx.ErrNoRows {
+		hr.logger.Info("room not found", "room_id", roomID)
+		hr.notFound(w, r)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to get room", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Verify room belongs to the specified event
+	if uuid.UUID(room.EventID.Bytes) != eventID {
+		hr.badRequest(w, r, errors.New("room does not belong to specified event"))
+		return
+	}
+
+	// Verify user is actually in the room
+	_, err = hr.queries.GetRoomPlayer(r.Context(), store.GetRoomPlayerParams{
+		RoomID: toPgtypeUUID(roomID),
+		UserID: toPgtypeUUID(userID),
+	})
+	if err == pgx.ErrNoRows {
+		hr.badRequest(w, r, errors.New("player is not in this room"))
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to get room player", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Delete the room_player record (user is deliberately leaving)
+	err = hr.queries.DeleteRoomPlayer(r.Context(), store.DeleteRoomPlayerParams{
+		RoomID: toPgtypeUUID(roomID),
+		UserID: toPgtypeUUID(userID),
+	})
+	if err != nil {
+		hr.logger.Error("failed to delete room player", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	hr.logger.Info("User left room",
+		"user_id", userID,
+		"room_id", roomID,
+		"event_id", eventID)
+
+	// Get the room hub and send PlayerLeft event
+	roomHub := hr.eventHub.GetRoomById(roomID)
+	if roomHub != nil {
+		// Send PlayerLeft event to notify other players
+		roomHub.Events <- events.PlayerLeft{
+			PlayerID: userID,
+			RoomID:   roomID,
+		}
+		hr.logger.Info("Sent PlayerLeft event to room hub",
+			"user_id", userID,
+			"room_id", roomID)
+	} else {
+		hr.logger.Warn("Room hub not found in memory, PlayerLeft event not sent",
+			"room_id", roomID)
+	}
+
+	err = response.JSON(w, response.JSONResponseParameters{
+		Status:  http.StatusOK,
+		Success: true,
+		Msg:     "Successfully left the room",
+	})
+	if err != nil {
+		hr.serverError(w, r, err)
+	}
 }

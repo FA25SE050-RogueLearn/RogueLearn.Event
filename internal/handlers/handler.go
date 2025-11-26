@@ -63,13 +63,14 @@ func NewHandlerRepo(ctx context.Context, logger *slog.Logger, db *pgxpool.Pool, 
 	go eventHub.StartInactiveRoomCleanup(ctx, 5*time.Minute, 30*time.Minute)
 
 	return &HandlerRepo{
-		logger:       logger,
-		db:           db,
-		queries:      queries,
-		jwtParser:    jwt.NewJWTParser(secKey, issuer, audience, logger),
-		eventHub:     eventHub,
-		rabbitClient: rabbitClient,
-		userClient:   userClient,
+		logger:         logger,
+		db:             db,
+		queries:        queries,
+		jwtParser:      jwt.NewJWTParser(secKey, issuer, audience, logger),
+		eventHub:       eventHub,
+		rabbitClient:   rabbitClient,
+		executorClient: executorClient,
+		userClient:     userClient,
 	}
 }
 

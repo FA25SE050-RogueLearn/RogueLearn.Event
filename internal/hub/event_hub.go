@@ -25,17 +25,19 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type CodeBattleKey string
+
 const (
 	DefaultQueryTimeoutSecond = 10 * time.Second
 
-	AchievementCodeBattleTop1        = "code_battle_top_1"
-	AchievementCodeBattleTop2        = "code_battle_top_2"
-	AchievementCodeBattleTop3        = "code_battle_top_3"
-	AchievementCodeBattleParticipant = "code_battle_participant"
+	AchievementCodeBattleTop1        CodeBattleKey = "code_battle_top_1"
+	AchievementCodeBattleTop2        CodeBattleKey = "code_battle_top_2"
+	AchievementCodeBattleTop3        CodeBattleKey = "code_battle_top_3"
+	AchievementCodeBattleParticipant CodeBattleKey = "code_battle_participant"
 )
 
 var (
-	AchievementCodeBattle map[int]string = map[int]string{
+	AchievementCodeBattle map[int]CodeBattleKey = map[int]CodeBattleKey{
 		1: AchievementCodeBattleTop1,
 		2: AchievementCodeBattleTop2,
 		3: AchievementCodeBattleTop3,
@@ -222,9 +224,12 @@ func (e *EventHub) completeEvent(eventID uuid.UUID) bool {
 	// Transaction committed successfully
 	// Now perform non-critical operations that shouldn't block or rollback the transaction
 
-	// Grant achievements to top 3 players asynchronously
+	// Grant achievements to users (contribution points handled by gRPC server)
 	// This is done AFTER transaction commit to prevent gRPC failures from rolling back event completion
-	go e.grantAchievementsAsync(ctx, eventID)
+	go e.grantUserRewards(eventID)
+
+	// Grant achievements to guilds (merit points handled by gRPC server)
+	go e.grantGuildRewards(eventID)
 
 	// Notify other instances via RabbitMQ
 	// Use retry mechanism for RabbitMQ publish (P0-2)
@@ -360,77 +365,244 @@ func (e *EventHub) completeEventTransaction(ctx context.Context, eventID uuid.UU
 	return true
 }
 
-// grantAchievementsAsync grants achievements to top 3 players asynchronously.
+// grantUserRewards grants achievements to all event participants asynchronously.
 // This runs in a separate goroutine to prevent gRPC failures from blocking event completion.
 // Called AFTER the event completion transaction has committed.
-func (e *EventHub) grantAchievementsAsync(ctx context.Context, eventID uuid.UUID) {
+//
+// The gRPC server handling GrantAchievements will automatically add contribution points,
+// so we don't need to call UpdateMemberContributionPoints separately.
+//
+// Rewards structure:
+// - Top 3 players: Code Battle Top 1/2/3 achievements
+// - All participants: Code Battle Participant achievement
+func (e *EventHub) grantUserRewards(eventID uuid.UUID) {
 	// Create a new context with timeout for gRPC calls
-	grantCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	grantCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	e.logger.Info("Starting async achievement granting", "event_id", eventID)
+	e.logger.Info("Starting async user rewards granting", "event_id", eventID)
 
-	// Get top 3 players
-	winningMembers, err := e.queries.GetTop3PlayersByEvent(grantCtx, toPgtypeUUID(eventID))
+	// Get all players who participated in the event
+	allPlayers, err := e.queries.GetAllPlayersByEvent(grantCtx, toPgtypeUUID(eventID))
 	if err != nil {
-		e.logger.Error("Failed to get top 3 players for achievement granting",
+		e.logger.Error("Failed to get all players for reward granting",
 			"event_id", eventID,
 			"error", err)
 		return
 	}
 
-	if len(winningMembers) == 0 {
-		e.logger.Info("No winners found for achievement granting", "event_id", eventID)
+	if len(allPlayers) == 0 {
+		e.logger.Info("No participants found for reward granting", "event_id", eventID)
 		return
 	}
 
-	e.logger.Info("Granting achievements to top players",
+	e.logger.Info("Granting rewards to event participants",
 		"event_id", eventID,
-		"player_count", len(winningMembers))
+		"total_participants", len(allPlayers))
 
-	// Grant achievements to each top player
-	for i, member := range winningMembers {
-		// Fix: Use i+1 since map keys are 1-based
-		achievementKey := AchievementCodeBattle[i+1]
+	// Track top 3 player IDs to avoid granting participant achievement to them
+	top3PlayerIDs := make(map[uuid.UUID]bool)
+
+	// Grant achievements to top 3 players
+	for i := 0; i < len(allPlayers) && i < 3; i++ {
+		player := allPlayers[i]
+		rank := i + 1
+		achievementKey := AchievementCodeBattle[rank]
+
 		if achievementKey == "" {
 			e.logger.Warn("No achievement key for rank",
-				"rank", i+1,
+				"rank", rank,
 				"event_id", eventID)
 			continue
 		}
 
-		resp, err := e.userClient.GrantAchievements(grantCtx,
+		playerUUID := uuid.UUID(player.UserID.Bytes)
+		top3PlayerIDs[playerUUID] = true
+
+		// Grant top 3 achievement (contribution points handled by gRPC server)
+		_, err := e.userClient.GrantAchievements(grantCtx,
 			&pb.GrantAchievementsRequest{
 				UserAchievements: []*pb.UserAchievementGrant{
 					{
-						UserId:         member.UserID.String(),
-						AchievementKey: achievementKey,
+						UserId:         playerUUID.String(),
+						AchievementKey: string(achievementKey),
 					},
 				},
 			})
 
 		if err != nil {
-			e.logger.Error("Failed to grant achievement to player",
+			e.logger.Error("Failed to grant top achievement to player",
 				"event_id", eventID,
-				"user_id", member.UserID.String(),
-				"rank", i+1,
+				"user_id", playerUUID.String(),
+				"rank", rank,
 				"achievement", achievementKey,
 				"error", err)
 			// Continue to next player - don't fail entire operation
+		} else {
+			e.logger.Info("Successfully granted top achievement",
+				"event_id", eventID,
+				"user_id", playerUUID.String(),
+				"rank", rank,
+				"achievement", achievementKey)
+		}
+	}
+
+	// Grant participant achievement to all other players
+	participantAchievementKey := AchievementCodeBattleParticipant
+
+	for _, player := range allPlayers {
+		playerUUID := uuid.UUID(player.UserID.Bytes)
+
+		// Skip top 3 players (they already got their rewards)
+		if top3PlayerIDs[playerUUID] {
 			continue
 		}
 
-		e.logger.Info("Successfully granted achievement",
-			"event_id", eventID,
-			"user_id", member.UserID.String(),
-			"rank", i+1,
-			"achievement", achievementKey,
-			"response", resp)
+		// Grant participant achievement (contribution points handled by gRPC server)
+		_, err := e.userClient.GrantAchievements(grantCtx,
+			&pb.GrantAchievementsRequest{
+				UserAchievements: []*pb.UserAchievementGrant{
+					{
+						UserId:         playerUUID.String(),
+						AchievementKey: string(participantAchievementKey),
+					},
+				},
+			})
+
+		if err != nil {
+			e.logger.Error("Failed to grant participant achievement",
+				"event_id", eventID,
+				"user_id", playerUUID.String(),
+				"error", err)
+		} else {
+			e.logger.Info("Successfully granted participant achievement",
+				"event_id", eventID,
+				"user_id", playerUUID.String())
+		}
 	}
 
-	e.logger.Info("Completed async achievement granting",
+	e.logger.Info("Completed async user rewarding",
 		"event_id", eventID,
-		"total_players", len(winningMembers))
+		"total_participants", len(allPlayers),
+		"top_3_players", len(top3PlayerIDs))
+}
+
+// grantGuildRewards grants achievements to all guilds that participated in the event asynchronously.
+// This runs in a separate goroutine to prevent gRPC failures from blocking event completion.
+// Called AFTER the event completion transaction has committed.
+//
+// The gRPC server handling GrantGuildAchievement will automatically add merit points to guilds
+// based on the achievement's merit_points_reward field, so we don't need to call UpdateGuildMeritPoints separately.
+//
+// Rewards structure:
+// - Top 3 guilds: Code Battle Top 1/2/3 achievements (with merit points)
+// - All participating guilds: Code Battle Participant achievement (with merit points)
+func (e *EventHub) grantGuildRewards(eventID uuid.UUID) {
+	// Create a new context with timeout for gRPC calls
+	grantCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	e.logger.Info("Starting async guild rewards granting", "event_id", eventID)
+
+	// Get guild leaderboard for the event
+	guildLeaderboard, err := e.queries.GetGuildLeaderboardByEvent(grantCtx, toPgtypeUUID(eventID))
+	if err != nil {
+		e.logger.Error("Failed to get guild leaderboard for reward granting",
+			"event_id", eventID,
+			"error", err)
+		return
+	}
+
+	if len(guildLeaderboard) == 0 {
+		e.logger.Info("No guilds found for reward granting", "event_id", eventID)
+		return
+	}
+
+	e.logger.Info("Granting rewards to participating guilds",
+		"event_id", eventID,
+		"total_guilds", len(guildLeaderboard))
+
+	// Track top 3 guild IDs to avoid granting participant achievement to them
+	top3GuildIDs := make(map[uuid.UUID]bool)
+
+	// Grant achievements to top 3 guilds
+	for i := 0; i < len(guildLeaderboard) && i < 3; i++ {
+		guild := guildLeaderboard[i]
+		rank := i + 1
+		achievementKey := AchievementCodeBattle[rank]
+
+		if achievementKey == "" {
+			e.logger.Warn("No achievement key for rank",
+				"rank", rank,
+				"event_id", eventID)
+			continue
+		}
+
+		guildUUID := uuid.UUID(guild.GuildID.Bytes)
+		top3GuildIDs[guildUUID] = true
+
+		// Grant top 3 achievement (merit points handled by gRPC server)
+		_, err := e.userClient.GrantGuildAchievement(grantCtx,
+			&pb.GrantGuildAchievementRequest{
+				GuildId:        guildUUID.String(),
+				AchievementKey: string(achievementKey),
+			})
+
+		if err != nil {
+			e.logger.Error("Failed to grant top achievement to guild",
+				"event_id", eventID,
+				"guild_id", guildUUID.String(),
+				"guild_name", guild.GuildName,
+				"rank", rank,
+				"achievement", achievementKey,
+				"error", err)
+			// Continue to next guild - don't fail entire operation
+		} else {
+			e.logger.Info("Successfully granted top achievement to guild",
+				"event_id", eventID,
+				"guild_id", guildUUID.String(),
+				"guild_name", guild.GuildName,
+				"rank", rank,
+				"achievement", achievementKey)
+		}
+	}
+
+	// Grant participant achievement to all other guilds
+	participantAchievementKey := AchievementCodeBattleParticipant
+
+	for _, guild := range guildLeaderboard {
+		guildUUID := uuid.UUID(guild.GuildID.Bytes)
+
+		// Skip top 3 guilds (they already got their rewards)
+		if top3GuildIDs[guildUUID] {
+			continue
+		}
+
+		// Grant participant achievement (merit points handled by gRPC server)
+		_, err := e.userClient.GrantGuildAchievement(grantCtx,
+			&pb.GrantGuildAchievementRequest{
+				GuildId:        guildUUID.String(),
+				AchievementKey: string(participantAchievementKey),
+			})
+
+		if err != nil {
+			e.logger.Error("Failed to grant participant achievement to guild",
+				"event_id", eventID,
+				"guild_id", guildUUID.String(),
+				"guild_name", guild.GuildName,
+				"error", err)
+		} else {
+			e.logger.Info("Successfully granted participant achievement to guild",
+				"event_id", eventID,
+				"guild_id", guildUUID.String(),
+				"guild_name", guild.GuildName)
+		}
+	}
+
+	e.logger.Info("Completed async guild rewarding",
+		"event_id", eventID,
+		"total_guilds", len(guildLeaderboard),
+		"top_3_guilds", len(top3GuildIDs))
 }
 
 // buildEventExpiredMessage creates an enhanced EventExpired message with winners and statistics.
@@ -1888,6 +2060,7 @@ func (r *RoomHub) processPlayerLeft(event events.PlayerLeft) error {
 		UserID: toPgtypeUUID(event.PlayerID),
 		State:  store.RoomPlayerStateDisconnected,
 	})
+
 	if err != nil {
 		r.logger.Error("failed to update player state",
 			"error", err,
@@ -1903,25 +2076,27 @@ func (r *RoomHub) processPlayerLeft(event events.PlayerLeft) error {
 		r.logger.Error("failed to calculate leaderboard after player left", "error", err)
 	}
 
-	playerLeft := events.SseEvent{
-		EventType: events.PLAYER_LEFT,
-		Data:      data,
-	}
-
-	go r.dispatchEvent(playerLeft)
-	r.logger.Info("player left", "event", event)
-
 	entries, err := r.getRoomLeaderboardEntries(ctx)
 	if err != nil {
 		r.logger.Error("failed to get room leaderboard entries", "error", err)
 	}
+
+	roomRoutingKey := fmt.Sprintf("room.%s", r.RoomID)
 
 	leaderboardUpdated := events.SseEvent{
 		EventType: events.LEADERBOARD_UPDATED,
 		Data:      entries,
 	}
 
-	go r.dispatchEvent(leaderboardUpdated)
+	r.publishEvent(ctx, roomRoutingKey, leaderboardUpdated)
+
+	playerLeft := events.SseEvent{
+		EventType: events.PLAYER_LEFT,
+		Data:      data,
+	}
+
+	r.publishEvent(ctx, roomRoutingKey, playerLeft)
+	r.logger.Info("player left", "event", event)
 
 	return nil
 }
