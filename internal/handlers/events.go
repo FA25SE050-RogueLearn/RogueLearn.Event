@@ -82,48 +82,25 @@ func (hr *HandlerRepo) GetEventsHandler(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	} else {
-		// No status filter provided
-		// Normal users: only show 'pending', 'active' and 'completed' events
-		// Game Masters: show all events
-		if !isGameMaster {
-			// For normal users without status filter, only return pending, active and completed events
-			// Use a single query with hardcoded statuses to ensure correct pagination
-			totalCount, err = hr.queries.CountEventsForNormalUsers(r.Context())
-			if err != nil {
-				hr.logger.Error("failed to count events for normal users", "err", err)
-				hr.serverError(w, r, err)
-				return
-			}
+		// No status filter provided - return only active events
+		// Get count with status filter
+		totalCount, err = hr.queries.CountEventsByStatus(r.Context(), store.EventStatusActive)
+		if err != nil {
+			hr.logger.Error("failed to count events by status", "err", err, "status", "active")
+			hr.serverError(w, r, err)
+			return
+		}
 
-			events, err = hr.queries.GetEventsForNormalUsers(r.Context(), store.GetEventsForNormalUsersParams{
-				Limit:  pagination.Limit,
-				Offset: pagination.Offset,
-			})
-			if err != nil {
-				hr.logger.Error("failed to get events for normal users", "err", err)
-				hr.serverError(w, r, err)
-				return
-			}
-		} else {
-			// Game Master: show all events
-			totalCount, err = hr.queries.CountEvents(r.Context())
-			if err != nil {
-				hr.logger.Error("failed to count events", "err", err)
-				hr.serverError(w, r, err)
-				return
-			}
-
-			params := store.GetEventsParams{
-				Limit:  pagination.Limit,
-				Offset: pagination.Offset,
-			}
-
-			events, err = hr.queries.GetEvents(r.Context(), params)
-			if err != nil {
-				hr.logger.Error("failed to get events", "err", err)
-				hr.serverError(w, r, err)
-				return
-			}
+		// Get filtered events
+		events, err = hr.queries.GetEventsByStatus(r.Context(), store.GetEventsByStatusParams{
+			Status: store.EventStatusActive,
+			Limit:  pagination.Limit,
+			Offset: pagination.Offset,
+		})
+		if err != nil {
+			hr.logger.Error("failed to get events by status", "err", err, "status", "active")
+			hr.serverError(w, r, err)
+			return
 		}
 	}
 
@@ -1232,6 +1209,7 @@ func toEventRequestResponse(req store.EventRequest) (EventRequestResponse, error
 // so we delete the room_player record instead of just updating the state.
 // However, we still send a PlayerLeft event to the room for real-time notification.
 func (hr *HandlerRepo) LeaveRoomHandler(w http.ResponseWriter, r *http.Request) {
+	hr.logger.Debug("-----------------LeaveRoomHandler called-----------------")
 	eventIDStr := chi.URLParam(r, "event_id")
 	eventID, err := uuid.Parse(eventIDStr)
 	if err != nil {
@@ -1332,7 +1310,9 @@ func (hr *HandlerRepo) LeaveRoomHandler(w http.ResponseWriter, r *http.Request) 
 		Success: true,
 		Msg:     "Successfully left the room",
 	})
+
 	if err != nil {
 		hr.serverError(w, r, err)
 	}
+	hr.logger.Debug("-----------------LeaveRoomHandler END-----------------")
 }

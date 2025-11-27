@@ -167,6 +167,34 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if player has previously left the room (state = 'left')
+	// Players who explicitly left cannot rejoin
+	existingPlayer, err := hr.queries.GetRoomPlayer(r.Context(), store.GetRoomPlayerParams{
+		RoomID: toPgtypeUUID(roomID),
+		UserID: toPgtypeUUID(userID),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		hr.logger.Debug("User not joined yet, continuing...")
+	} else if err != nil {
+		hr.logger.Error("failed to get player",
+			"error", err,
+			"player_id", userID,
+			"room_id", roomID,
+		)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Player record exists, check if they left
+	if existingPlayer.State == store.RoomPlayerStateLeft {
+		hr.logger.Warn("player previously left the room and cannot rejoin",
+			"user_id", userID,
+			"room_id", roomID,
+			"state", existingPlayer.State)
+		hr.badRequest(w, r, ErrPlayerLeftRoom)
+		return
+	}
+
 	hr.logger.Info("user selection validated - player is authorized to join",
 		"user_id", userID,
 		"guild_id", guildID,
@@ -180,28 +208,6 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
 	w.Header().Set("X-Accel-Buffering", "no") // Helps with Nginx/Traefik proxies
 
-	// Check if player has previously left the room (state = 'left')
-	// Players who explicitly left cannot rejoin
-	existingPlayer, err := hr.queries.GetRoomPlayer(r.Context(), store.GetRoomPlayerParams{
-		RoomID: toPgtypeUUID(roomID),
-		UserID: toPgtypeUUID(userID),
-	})
-	if err == nil {
-		// Player record exists, check if they left
-		if existingPlayer.State == store.RoomPlayerStateLeft {
-			hr.logger.Warn("player previously left the room and cannot rejoin",
-				"user_id", userID,
-				"room_id", roomID,
-				"state", existingPlayer.State)
-			hr.badRequest(w, r, ErrPlayerLeftRoom)
-			return
-		}
-	} else if !errors.Is(err, pgx.ErrNoRows) {
-		// Unexpected error (not just "no rows")
-		hr.logger.Error("failed to check room player state", "error", err)
-		hr.serverError(w, r, err)
-		return
-	}
 	// If err == pgx.ErrNoRows, player hasn't joined before, which is fine
 
 	// Get or create the room manager for the requested room.
