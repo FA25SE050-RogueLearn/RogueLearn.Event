@@ -83,6 +83,9 @@ func (app *Application) routes() http.Handler {
 		r.Get("/", app.handlers.GetProblemsHandler)
 		r.Get("/{problem_id}", app.handlers.GetProblemHandler)
 		r.Get("/{problem_id}/details", app.handlers.GetProblemDetails)
+
+		// Auth-protected routes for problem submissions
+		r.With(app.handlers.AuthMiddleware).Get("/{problem_id}/submissions", app.handlers.GetMySubmissionsByProblemHandler)
 	})
 
 	mux.Route("/tags", func(r chi.Router) {

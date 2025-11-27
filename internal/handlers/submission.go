@@ -46,6 +46,7 @@ type SubmissionResponse struct {
 	LanguageID      string                 `json:"language_id,omitempty"`
 	LanguageName    string                 `json:"language_name,omitempty"`
 	Status          store.SubmissionStatus `json:"status"`
+	CodeSubmitted   string                 `json:"code_submitted,omitempty"`
 	SubmittedAt     time.Time              `json:"submitted_at"`
 	ExecutionTimeMs string                 `json:"execution_time_ms,omitempty"`
 }
@@ -235,6 +236,53 @@ func (hr *HandlerRepo) GetMySubmissionsHandler(w http.ResponseWriter, r *http.Re
 	})
 }
 
+// GetMySubmissionsByProblemHandler returns all submissions for a specific user and problem
+func (hr *HandlerRepo) GetMySubmissionsByProblemHandler(w http.ResponseWriter, r *http.Request) {
+	userClaims, err := GetUserClaims(r.Context())
+	if err != nil {
+		hr.logger.Error("failed to get user claims", "err", err)
+		hr.badRequest(w, r, err)
+		return
+	}
+
+	hr.logger.Info("userClaims parsed!", "user_claims", *userClaims)
+
+	// Get user ID from claims
+	userID, err := uuid.Parse(userClaims.GetUserID())
+	if err != nil {
+		hr.badRequest(w, r, errors.New("invalid user_id"))
+		return
+	}
+
+	// Get problem ID from URL parameter
+	problemIDStr := chi.URLParam(r, "problem_id")
+	problemID, err := uuid.Parse(problemIDStr)
+	if err != nil {
+		hr.badRequest(w, r, errors.New("invalid problem_id"))
+		return
+	}
+
+	// Get all submissions for this user and problem (no pagination)
+	submissions, err := hr.queries.GetSubmissionsByUserAndProblem(r.Context(), store.GetSubmissionsByUserAndProblemParams{
+		UserID:        toPgtypeUUID(userID),
+		CodeProblemID: toPgtypeUUID(problemID),
+		Limit:         1000,
+		Offset:        0,
+	})
+	if err != nil {
+		hr.logger.Error("failed to get submissions", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	response.JSON(w, response.JSONResponseParameters{
+		Status:  http.StatusOK,
+		Data:    hr.toSubmissionsByProblemResponses(submissions),
+		Success: true,
+		Msg:     "Submissions retrieved successfully",
+	})
+}
+
 // Helper function to convert execution time from string (e.g., "200ms") to pgtype.Int4
 func parseExecutionTime(execTimeStr string) pgtype.Int4 {
 	if execTimeStr == "" {
@@ -268,6 +316,23 @@ func (hr *HandlerRepo) toSubmissionResponses(submissions []store.GetSubmissionsB
 			CodeProblemID:   s.CodeProblemID.String(),
 			ProblemTitle:    s.ProblemTitle,
 			LanguageName:    s.LanguageName,
+			Status:          s.Status,
+			SubmittedAt:     s.SubmittedAt.Time,
+			ExecutionTimeMs: formatExecutionTime(s.ExecutionTimeMs),
+		})
+	}
+	return responses
+}
+
+// toSubmissionsByProblemResponses converts database submission rows to response format
+func (hr *HandlerRepo) toSubmissionsByProblemResponses(submissions []store.GetSubmissionsByUserAndProblemRow) []SubmissionResponse {
+	var responses []SubmissionResponse
+	for _, s := range submissions {
+		responses = append(responses, SubmissionResponse{
+			CodeProblemID:   s.CodeProblemID.String(),
+			ProblemTitle:    s.ProblemTitle,
+			LanguageName:    s.LanguageName,
+			CodeSubmitted:   s.CodeSubmitted,
 			Status:          s.Status,
 			SubmittedAt:     s.SubmittedAt.Time,
 			ExecutionTimeMs: formatExecutionTime(s.ExecutionTimeMs),

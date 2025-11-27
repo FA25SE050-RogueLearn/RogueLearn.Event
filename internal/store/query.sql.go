@@ -359,6 +359,24 @@ func (q *Queries) CountSubmissionsByUser(ctx context.Context, userID pgtype.UUID
 	return count, err
 }
 
+const countSubmissionsByUserAndProblem = `-- name: CountSubmissionsByUserAndProblem :one
+SELECT COUNT(*)
+FROM submissions s
+WHERE s.user_id = $1 AND s.code_problem_id = $2
+`
+
+type CountSubmissionsByUserAndProblemParams struct {
+	UserID        pgtype.UUID
+	CodeProblemID pgtype.UUID
+}
+
+func (q *Queries) CountSubmissionsByUserAndProblem(ctx context.Context, arg CountSubmissionsByUserAndProblemParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSubmissionsByUserAndProblem, arg.UserID, arg.CodeProblemID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countTags = `-- name: CountTags :one
 SELECT COUNT(*) FROM tags
 `
@@ -3323,6 +3341,75 @@ func (q *Queries) GetSubmissionsByUser(ctx context.Context, arg GetSubmissionsBy
 	var items []GetSubmissionsByUserRow
 	for rows.Next() {
 		var i GetSubmissionsByUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.CodeProblemID,
+			&i.LanguageID,
+			&i.RoomID,
+			&i.CodeSubmitted,
+			&i.Status,
+			&i.ExecutionTimeMs,
+			&i.SubmittedAt,
+			&i.ProblemTitle,
+			&i.LanguageName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getSubmissionsByUserAndProblem = `-- name: GetSubmissionsByUserAndProblem :many
+SELECT s.id, s.user_id, s.code_problem_id, s.language_id, s.room_id, s.code_submitted, s.status, s.execution_time_ms, s.submitted_at, cp.title as problem_title, l.name as language_name
+FROM submissions s
+JOIN code_problems cp ON s.code_problem_id = cp.id
+JOIN languages l ON s.language_id = l.id
+WHERE s.user_id = $1 AND s.code_problem_id = $2
+ORDER BY s.submitted_at DESC
+LIMIT $3
+OFFSET $4
+`
+
+type GetSubmissionsByUserAndProblemParams struct {
+	UserID        pgtype.UUID
+	CodeProblemID pgtype.UUID
+	Limit         int32
+	Offset        int32
+}
+
+type GetSubmissionsByUserAndProblemRow struct {
+	ID              pgtype.UUID
+	UserID          pgtype.UUID
+	CodeProblemID   pgtype.UUID
+	LanguageID      pgtype.UUID
+	RoomID          pgtype.UUID
+	CodeSubmitted   string
+	Status          SubmissionStatus
+	ExecutionTimeMs pgtype.Int4
+	SubmittedAt     pgtype.Timestamptz
+	ProblemTitle    string
+	LanguageName    string
+}
+
+func (q *Queries) GetSubmissionsByUserAndProblem(ctx context.Context, arg GetSubmissionsByUserAndProblemParams) ([]GetSubmissionsByUserAndProblemRow, error) {
+	rows, err := q.db.Query(ctx, getSubmissionsByUserAndProblem,
+		arg.UserID,
+		arg.CodeProblemID,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetSubmissionsByUserAndProblemRow
+	for rows.Next() {
+		var i GetSubmissionsByUserAndProblemRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.UserID,

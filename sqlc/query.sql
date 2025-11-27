@@ -532,6 +532,21 @@ JOIN languages l ON s.language_id = l.id
 WHERE s.code_problem_id = $1
 ORDER BY s.submitted_at DESC;
 
+-- name: GetSubmissionsByUserAndProblem :many
+SELECT s.*, cp.title as problem_title, l.name as language_name
+FROM submissions s
+JOIN code_problems cp ON s.code_problem_id = cp.id
+JOIN languages l ON s.language_id = l.id
+WHERE s.user_id = $1 AND s.code_problem_id = $2
+ORDER BY s.submitted_at DESC
+LIMIT $3
+OFFSET $4;
+
+-- name: CountSubmissionsByUserAndProblem :one
+SELECT COUNT(*)
+FROM submissions s
+WHERE s.user_id = $1 AND s.code_problem_id = $2;
+
 -- name: GetSubmissionsByRoom :many
 SELECT s.*, cp.title as problem_title, l.name as language_name
 FROM submissions s
