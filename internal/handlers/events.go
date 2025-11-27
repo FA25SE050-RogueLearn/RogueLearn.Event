@@ -764,7 +764,7 @@ func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventR
 	qtx := hr.queries.WithTx(tx)
 
 	// Calculate assignment_date: 15 minutes before event start
-	assignmentDate := req.ProposedStartDate.Time.Add(-15 * time.Minute)
+	assignmentDate := req.ProposedStartDate.Time.Add(-5 * time.Minute)
 
 	// Create the actual event (rooms will be created dynamically at assignment time)
 	event, err := qtx.CreateEvent(ctx, store.CreateEventParams{
