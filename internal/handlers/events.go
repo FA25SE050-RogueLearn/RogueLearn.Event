@@ -255,7 +255,6 @@ func (hr *HandlerRepo) GetEventDetailsHandler(w http.ResponseWriter, r *http.Req
 }
 
 // CreateEventHandler handles the submission of a new event creation request.
-// It no longer creates an event directly.
 func (hr *HandlerRepo) CreateEventHandler(w http.ResponseWriter, r *http.Request) {
 	var req EventCreationRequest
 	err := request.DecodeJSON(w, r, &req)
@@ -273,6 +272,22 @@ func (hr *HandlerRepo) CreateEventHandler(w http.ResponseWriter, r *http.Request
 		hr.badRequest(w, r, errors.New("start date must be before end date"))
 		return
 	}
+
+	// Validate event specifics if provided
+	if req.EventSpecifics != nil && req.EventSpecifics.CodeBattle != nil {
+		// Check for duplicate topics
+		if len(req.EventSpecifics.CodeBattle.Topics) > 0 {
+			topicSet := make(map[uuid.UUID]bool)
+			for _, topicID := range req.EventSpecifics.CodeBattle.Topics {
+				if topicSet[topicID] {
+					hr.badRequest(w, r, fmt.Errorf("duplicate topic ID found: %s", topicID))
+					return
+				}
+				topicSet[topicID] = true
+			}
+		}
+	}
+
 	// get guild_id by grpc
 	userClaims, err := GetUserClaims(r.Context())
 	if err != nil {
