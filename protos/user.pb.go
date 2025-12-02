@@ -985,6 +985,7 @@ type Achievement struct {
 	Version       int32                  `protobuf:"varint,10,opt,name=version,proto3" json:"version,omitempty"`
 	IsActive      bool                   `protobuf:"varint,11,opt,name=is_active,json=isActive,proto3" json:"is_active,omitempty"`
 	SourceService string                 `protobuf:"bytes,12,opt,name=source_service,json=sourceService,proto3" json:"source_service,omitempty"`
+	IsMedal       bool                   `protobuf:"varint,13,opt,name=is_medal,json=isMedal,proto3" json:"is_medal,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1101,6 +1102,13 @@ func (x *Achievement) GetSourceService() string {
 		return x.SourceService
 	}
 	return ""
+}
+
+func (x *Achievement) GetIsMedal() bool {
+	if x != nil {
+		return x.IsMedal
+	}
+	return false
 }
 
 type AchievementList struct {
@@ -1607,6 +1615,7 @@ type UserAchievementGrant struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	UserId         string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	AchievementKey string                 `protobuf:"bytes,2,opt,name=achievement_key,json=achievementKey,proto3" json:"achievement_key,omitempty"`
+	Context        string                 `protobuf:"bytes,3,opt,name=context,proto3" json:"context,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -1651,6 +1660,13 @@ func (x *UserAchievementGrant) GetUserId() string {
 func (x *UserAchievementGrant) GetAchievementKey() string {
 	if x != nil {
 		return x.AchievementKey
+	}
+	return ""
+}
+
+func (x *UserAchievementGrant) GetContext() string {
+	if x != nil {
+		return x.Context
 	}
 	return ""
 }
@@ -2994,7 +3010,7 @@ const file_user_proto_rawDesc = "" +
 	"enrollment\x12-\n" +
 	"\x06skills\x18\v \x01(\v2\x15.user.v1.SkillSummaryR\x06skills\x12-\n" +
 	"\x12achievements_count\x18\f \x01(\x05R\x11achievementsCount\"\x0f\n" +
-	"\rGetAllRequest\"\xcc\x02\n" +
+	"\rGetAllRequest\"\xe7\x02\n" +
 	"\vAchievement\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x12\x12\n" +
@@ -3009,7 +3025,8 @@ const file_user_proto_rawDesc = "" +
 	"\aversion\x18\n" +
 	" \x01(\x05R\aversion\x12\x1b\n" +
 	"\tis_active\x18\v \x01(\bR\bisActive\x12%\n" +
-	"\x0esource_service\x18\f \x01(\tR\rsourceService\"K\n" +
+	"\x0esource_service\x18\f \x01(\tR\rsourceService\x12\x19\n" +
+	"\bis_medal\x18\r \x01(\bR\aisMedal\"K\n" +
 	"\x0fAchievementList\x128\n" +
 	"\fachievements\x18\x01 \x03(\v2\x14.user.v1.AchievementR\fachievements\"\xc9\x02\n" +
 	"\x18CreateAchievementRequest\x12\x10\n" +
@@ -3051,10 +3068,11 @@ const file_user_proto_rawDesc = "" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12%\n" +
 	"\x0eachievement_id\x18\x02 \x01(\tR\rachievementId\"f\n" +
 	"\x18GrantAchievementsRequest\x12J\n" +
-	"\x11user_achievements\x18\x01 \x03(\v2\x1d.user.v1.UserAchievementGrantR\x10userAchievements\"X\n" +
+	"\x11user_achievements\x18\x01 \x03(\v2\x1d.user.v1.UserAchievementGrantR\x10userAchievements\"r\n" +
 	"\x14UserAchievementGrant\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12'\n" +
-	"\x0fachievement_key\x18\x02 \x01(\tR\x0eachievementKey\"X\n" +
+	"\x0fachievement_key\x18\x02 \x01(\tR\x0eachievementKey\x12\x18\n" +
+	"\acontext\x18\x03 \x01(\tR\acontext\"X\n" +
 	"\x19GrantAchievementsResponse\x12#\n" +
 	"\rgranted_count\x18\x01 \x01(\x05R\fgrantedCount\x12\x16\n" +
 	"\x06errors\x18\x02 \x03(\tR\x06errors\"J\n" +

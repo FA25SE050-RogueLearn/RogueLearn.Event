@@ -268,8 +268,9 @@ func (hr *HandlerRepo) CreateEventHandler(w http.ResponseWriter, r *http.Request
 		hr.badRequest(w, r, errors.New("event title cannot be empty"))
 		return
 	}
-	if req.ProposedStartDate.After(req.ProposedEndDate) {
-		hr.badRequest(w, r, errors.New("start date must be before end date"))
+
+	if valid, msg := validDate(req); !valid {
+		hr.badRequest(w, r, errors.New(msg))
 		return
 	}
 
@@ -383,6 +384,22 @@ func (hr *HandlerRepo) CreateEventHandler(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		hr.serverError(w, r, err)
 	}
+}
+
+func validDate(req EventCreationRequest) (valid bool, msg string) {
+	if req.ProposedStartDate.UTC().After(req.ProposedEndDate.UTC()) {
+		return false, "Proposed start date cannot be after proposed end date"
+	}
+
+	if req.ProposedStartDate.UTC().Before(time.Now().UTC()) {
+		return false, "Proposed start date cannot be in the past"
+	}
+
+	if req.ProposedEndDate.UTC().Before(time.Now().UTC()) {
+		return false, "Proposed end date cannot be in the past"
+	}
+
+	return true, ""
 }
 
 // GetMyEventRequestsHandler fetches a list of event requests submitted by a specific guild.
@@ -510,6 +527,11 @@ func (hr *HandlerRepo) RegisterGuildToEventHandler(w http.ResponseWriter, r *htt
 	guild, err := hr.userClient.GetMyGuild(ctx, &protos.GetMyGuildRequest{
 		AuthUserId: userClaims.Sub,
 	})
+	if err != nil {
+		hr.logger.Error("failed to get guild", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
 
 	guildID, err := uuid.Parse(guild.Id)
 	if err != nil {
@@ -561,8 +583,10 @@ func (hr *HandlerRepo) RegisterGuildToEventHandler(w http.ResponseWriter, r *htt
 
 	// room_id will be known later (assigned at assignment_date)
 	_, err = qtx.CreateEventGuildParticipant(r.Context(), store.CreateEventGuildParticipantParams{
-		EventID: toPgtypeUUID(eventID),
-		GuildID: toPgtypeUUID(guildID),
+		EventID:   toPgtypeUUID(eventID),
+		GuildID:   toPgtypeUUID(guildID),
+		RoomID:    pgtype.UUID{Valid: false},
+		GuildName: pgtype.Text{String: guild.Name, Valid: guild.Name != ""},
 	})
 	if err != nil {
 		// Check for duplicate registration and provide friendly error
@@ -763,8 +787,7 @@ func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventR
 	defer tx.Rollback(ctx)
 	qtx := hr.queries.WithTx(tx)
 
-	// Calculate assignment_date: 15 minutes before event start
-	assignmentDate := req.ProposedStartDate.Time.Add(-5 * time.Minute)
+	assignmentDate := req.ProposedStartDate.Time.Add(-time.Duration(hr.eventConfig.AssignmentDelayMinutes) * time.Minute)
 
 	// Create the actual event (rooms will be created dynamically at assignment time)
 	event, err := qtx.CreateEvent(ctx, store.CreateEventParams{
@@ -888,6 +911,11 @@ func (hr *HandlerRepo) SelectGuildMembersHandler(w http.ResponseWriter, r *http.
 	guild, err := hr.userClient.GetMyGuild(ctx, &protos.GetMyGuildRequest{
 		AuthUserId: userClaims.Sub,
 	})
+	if err != nil {
+		hr.logger.Error("failed to get guild", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
 
 	guildID, err := uuid.Parse(guild.Id)
 	if err != nil {
@@ -1045,6 +1073,11 @@ func (hr *HandlerRepo) GetEventGuildMembersHandler(w http.ResponseWriter, r *htt
 	guild, err := hr.userClient.GetMyGuild(ctx, &protos.GetMyGuildRequest{
 		AuthUserId: userClaims.Sub,
 	})
+	if err != nil {
+		hr.logger.Error("failed to get guild", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
 
 	guildID, err := uuid.Parse(guild.Id)
 	if err != nil {
@@ -1100,6 +1133,11 @@ func (hr *HandlerRepo) RemoveGuildMembersHandler(w http.ResponseWriter, r *http.
 	guild, err := hr.userClient.GetMyGuild(ctx, &protos.GetMyGuildRequest{
 		AuthUserId: userClaims.Sub,
 	})
+	if err != nil {
+		hr.logger.Error("failed to get guild", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
 
 	guildID, err := uuid.Parse(guild.Id)
 	if err != nil {

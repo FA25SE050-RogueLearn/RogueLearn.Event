@@ -143,6 +143,20 @@ SELECT COUNT(*) FROM tags;
 -- name: GetTagByName :one
 SELECT * FROM tags WHERE name = $1;
 
+-- name: GetTagsWithProblemCounts :many
+-- Get all tags with the count of available problems for each difficulty level
+SELECT
+    t.id,
+    t.name,
+    t.created_at,
+    cp.difficulty,
+    COUNT(cp.id) AS problem_count
+FROM tags t
+LEFT JOIN code_problem_tags cpt ON t.id = cpt.tag_id
+LEFT JOIN code_problems cp ON cpt.code_problem_id = cp.id
+GROUP BY t.id, t.name, t.created_at, cp.difficulty
+ORDER BY t.name, cp.difficulty;
+
 -- name: UpdateTag :one
 UPDATE tags
 SET name = $2
@@ -188,6 +202,15 @@ WHERE
 ORDER BY cp.created_at DESC
 LIMIT sqlc.arg(limit_count)
 OFFSET sqlc.arg(offset_count);
+
+-- name: CountCodeProblemsByCriteria :one
+SELECT COUNT(DISTINCT cp.id)
+FROM code_problems cp
+LEFT JOIN code_problem_tags cpt ON cp.id = cpt.code_problem_id
+LEFT JOIN tags t ON cpt.tag_id = t.id
+WHERE
+  (sqlc.narg(difficulty)::int IS NULL OR cp.difficulty = sqlc.narg(difficulty)::int)
+  AND (sqlc.narg(tag_names)::text[] IS NULL OR t.name = ANY(sqlc.narg(tag_names)::text[]));
 
 -- name: GetRandomCodeProblemsByDifficultyAndTags :many
 -- Randomly select code problems based on difficulty and tag IDs
@@ -537,7 +560,7 @@ SELECT s.*, cp.title as problem_title, l.name as language_name
 FROM submissions s
 JOIN code_problems cp ON s.code_problem_id = cp.id
 JOIN languages l ON s.language_id = l.id
-WHERE s.user_id = $1 AND s.code_problem_id = $2
+WHERE s.user_id = $1 AND s.code_problem_id = $2 AND s.room_id IS NULL
 ORDER BY s.submitted_at DESC
 LIMIT $3
 OFFSET $4;

@@ -245,6 +245,28 @@ func (q *Queries) CountCodeProblems(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countCodeProblemsByCriteria = `-- name: CountCodeProblemsByCriteria :one
+SELECT COUNT(DISTINCT cp.id)
+FROM code_problems cp
+LEFT JOIN code_problem_tags cpt ON cp.id = cpt.code_problem_id
+LEFT JOIN tags t ON cpt.tag_id = t.id
+WHERE
+  ($1::int IS NULL OR cp.difficulty = $1::int)
+  AND ($2::text[] IS NULL OR t.name = ANY($2::text[]))
+`
+
+type CountCodeProblemsByCriteriaParams struct {
+	Difficulty pgtype.Int4
+	TagNames   []string
+}
+
+func (q *Queries) CountCodeProblemsByCriteria(ctx context.Context, arg CountCodeProblemsByCriteriaParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countCodeProblemsByCriteria, arg.Difficulty, arg.TagNames)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countEventGuildMembers = `-- name: CountEventGuildMembers :one
 SELECT COUNT(*) FROM event_guild_members
 WHERE event_id = $1 AND guild_id = $2
@@ -3369,7 +3391,7 @@ SELECT s.id, s.user_id, s.code_problem_id, s.language_id, s.room_id, s.code_subm
 FROM submissions s
 JOIN code_problems cp ON s.code_problem_id = cp.id
 JOIN languages l ON s.language_id = l.id
-WHERE s.user_id = $1 AND s.code_problem_id = $2
+WHERE s.user_id = $1 AND s.code_problem_id = $2 AND s.room_id IS NULL
 ORDER BY s.submitted_at DESC
 LIMIT $3
 OFFSET $4
@@ -3477,6 +3499,55 @@ func (q *Queries) GetTags(ctx context.Context, arg GetTagsParams) ([]Tag, error)
 	for rows.Next() {
 		var i Tag
 		if err := rows.Scan(&i.ID, &i.Name, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getTagsWithProblemCounts = `-- name: GetTagsWithProblemCounts :many
+SELECT
+    t.id,
+    t.name,
+    t.created_at,
+    cp.difficulty,
+    COUNT(cp.id) AS problem_count
+FROM tags t
+LEFT JOIN code_problem_tags cpt ON t.id = cpt.tag_id
+LEFT JOIN code_problems cp ON cpt.code_problem_id = cp.id
+GROUP BY t.id, t.name, t.created_at, cp.difficulty
+ORDER BY t.name, cp.difficulty
+`
+
+type GetTagsWithProblemCountsRow struct {
+	ID           pgtype.UUID
+	Name         string
+	CreatedAt    pgtype.Timestamptz
+	Difficulty   pgtype.Int4
+	ProblemCount int64
+}
+
+// Get all tags with the count of available problems for each difficulty level
+func (q *Queries) GetTagsWithProblemCounts(ctx context.Context) ([]GetTagsWithProblemCountsRow, error) {
+	rows, err := q.db.Query(ctx, getTagsWithProblemCounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetTagsWithProblemCountsRow
+	for rows.Next() {
+		var i GetTagsWithProblemCountsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.Difficulty,
+			&i.ProblemCount,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

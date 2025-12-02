@@ -62,8 +62,6 @@ func (hr *HandlerRepo) AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		hr.logger.Debug("Token verified successfully", "user_id", claims.Sub, "email", claims.Email)
-
 		ctx := context.WithValue(r.Context(), UserClaimsKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

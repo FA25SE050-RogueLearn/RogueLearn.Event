@@ -382,6 +382,22 @@ func (e *EventHub) grantUserRewards(eventID uuid.UUID) {
 
 	e.logger.Info("Starting async user rewards granting", "event_id", eventID)
 
+	event, err := e.queries.GetEventByID(grantCtx, toPgtypeUUID(eventID))
+	if err == pgx.ErrNoRows {
+		e.logger.Debug("Event not found",
+			"event_id", eventID,
+			"error", err)
+		return
+	}
+	if err != nil {
+		// retry the granting process
+		e.logger.Error("Failed to get event",
+			"event_id", eventID,
+			"error", err)
+		e.logger.Debug("Retrying...")
+		return
+	}
+
 	// Get all players who participated in the event
 	allPlayers, err := e.queries.GetAllPlayersByEvent(grantCtx, toPgtypeUUID(eventID))
 	if err != nil {
@@ -420,12 +436,13 @@ func (e *EventHub) grantUserRewards(eventID uuid.UUID) {
 		top3PlayerIDs[playerUUID] = true
 
 		// Grant top 3 achievement (contribution points handled by gRPC server)
-		_, err := e.userClient.GrantAchievements(grantCtx,
+		resp, err := e.userClient.GrantAchievements(grantCtx,
 			&pb.GrantAchievementsRequest{
 				UserAchievements: []*pb.UserAchievementGrant{
 					{
 						UserId:         playerUUID.String(),
 						AchievementKey: string(achievementKey),
+						Context:        fmt.Sprintf("Achieved during %s Event", event.Title),
 					},
 				},
 			})
@@ -443,7 +460,8 @@ func (e *EventHub) grantUserRewards(eventID uuid.UUID) {
 				"event_id", eventID,
 				"user_id", playerUUID.String(),
 				"rank", rank,
-				"achievement", achievementKey)
+				"achievement", achievementKey,
+				"response", resp)
 		}
 	}
 
@@ -459,7 +477,7 @@ func (e *EventHub) grantUserRewards(eventID uuid.UUID) {
 		}
 
 		// Grant participant achievement (contribution points handled by gRPC server)
-		_, err := e.userClient.GrantAchievements(grantCtx,
+		resp, err := e.userClient.GrantAchievements(grantCtx,
 			&pb.GrantAchievementsRequest{
 				UserAchievements: []*pb.UserAchievementGrant{
 					{
@@ -477,7 +495,8 @@ func (e *EventHub) grantUserRewards(eventID uuid.UUID) {
 		} else {
 			e.logger.Info("Successfully granted participant achievement",
 				"event_id", eventID,
-				"user_id", playerUUID.String())
+				"user_id", playerUUID.String(),
+				"response", resp)
 		}
 	}
 
@@ -542,7 +561,7 @@ func (e *EventHub) grantGuildRewards(eventID uuid.UUID) {
 		top3GuildIDs[guildUUID] = true
 
 		// Grant top 3 achievement (merit points handled by gRPC server)
-		_, err := e.userClient.GrantGuildAchievement(grantCtx,
+		resp, err := e.userClient.GrantGuildAchievement(grantCtx,
 			&pb.GrantGuildAchievementRequest{
 				GuildId:        guildUUID.String(),
 				AchievementKey: string(achievementKey),
@@ -565,6 +584,10 @@ func (e *EventHub) grantGuildRewards(eventID uuid.UUID) {
 				"rank", rank,
 				"achievement", achievementKey)
 		}
+
+		e.logger.Debug("guild rewards granted",
+			"response", resp,
+			"guild_id", guild.GuildID.String())
 	}
 
 	// Grant participant achievement to all other guilds

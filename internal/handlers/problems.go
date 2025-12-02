@@ -1,9 +1,15 @@
 package handlers
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 
+	pb "github.com/FA25SE050-RogueLearn/RogueLearn.Event/protos"
+
 	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/internal/store"
+	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/request"
 	"github.com/FA25SE050-RogueLearn/RogueLearn.Event/pkg/response"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -166,50 +172,74 @@ func (hr *HandlerRepo) GetProblemDetails(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+type TagListResponse struct {
+	Data []TagResponse `json:"data"`
+}
+
 type TagResponse struct {
-	ID   uuid.UUID `json:"id"`
-	Name string    `json:"name"`
+	ID              uuid.UUID         `json:"id"`
+	Name            string            `json:"name"`
+	DifficultyCount []DifficultyCount `json:"difficulty_count"`
+}
+
+type DifficultyCount struct {
+	Difficulty   int `json:"difficulty"`
+	ProblemCount int `json:"problem_count"`
 }
 
 func (hr *HandlerRepo) GetTagsHandler(w http.ResponseWriter, r *http.Request) {
-	pagination := parsePaginationParams(r)
-
-	totalCount, err := hr.queries.CountTags(r.Context())
+	rows, err := hr.queries.GetTagsWithProblemCounts(r.Context())
 	if err != nil {
 		hr.serverError(w, r, err)
 		return
 	}
 
-	params := store.GetTagsParams{
-		Limit:  pagination.Limit,
-		Offset: pagination.Offset,
-	}
-
-	tags, err := hr.queries.GetTags(r.Context(), params)
-	if err != nil {
-		hr.serverError(w, r, err)
-		return
-	}
-
-	tagResponses := make([]TagResponse, len(tags))
-	for i, tag := range tags {
-		tagResponses[i] = TagResponse{
-			ID:   tag.ID.Bytes,
-			Name: tag.Name,
-		}
-	}
-
-	paginatedResponse := createPaginationResponse(tagResponses, totalCount, pagination)
+	tagResponses := toTagResponses(rows)
 
 	err = response.JSON(w, response.JSONResponseParameters{
 		Status:  http.StatusOK,
-		Data:    paginatedResponse,
+		Data:    tagResponses,
 		Success: true,
 		Msg:     "Tags retrieved successfully",
 	})
 	if err != nil {
 		hr.serverError(w, r, err)
 	}
+}
+
+func toTagResponses(rows []store.GetTagsWithProblemCountsRow) []TagResponse {
+	// Map to group rows by tag ID
+	tagMap := make(map[uuid.UUID]*TagResponse)
+
+	// Iterate through each row and group by tag
+	for _, row := range rows {
+		tagID := row.ID.Bytes
+
+		// If we haven't seen this tag yet, create a new TagResponse
+		if _, exists := tagMap[tagID]; !exists {
+			tagMap[tagID] = &TagResponse{
+				ID:              tagID,
+				Name:            row.Name,
+				DifficultyCount: make([]DifficultyCount, 0),
+			}
+		}
+
+		// Add difficulty count if difficulty is not null and problem_count > 0
+		if row.Difficulty.Valid && row.ProblemCount > 0 {
+			tagMap[tagID].DifficultyCount = append(tagMap[tagID].DifficultyCount, DifficultyCount{
+				Difficulty:   int(row.Difficulty.Int32),
+				ProblemCount: int(row.ProblemCount),
+			})
+		}
+	}
+
+	// Convert map to slice
+	responses := make([]TagResponse, 0, len(tagMap))
+	for _, tag := range tagMap {
+		responses = append(responses, *tag)
+	}
+
+	return responses
 }
 
 func toProblemResponse(problem store.CodeProblem) CodeProblemResponse {
@@ -240,4 +270,319 @@ func toProblemDetailResponse(problem store.CodeProblemLanguageDetail) CodeProble
 		TimeConstraintMs:  problem.TimeConstraintMs,
 		SpaceConstraintMb: problem.SpaceConstraintMb,
 	}
+}
+
+type CreateProblemRequest struct {
+	Title            string                       `json:"title"`
+	ProblemStatement string                       `json:"problem_statement"`
+	Difficulty       int32                        `json:"difficulty"`
+	TagIDs           []string                     `json:"tag_ids"`
+	LanguageDetails  []ProblemLanguageDetailInput `json:"language_details"`
+}
+
+type ProblemLanguageDetailInput struct {
+	LanguageID        string          `json:"language_id"`
+	SolutionStub      string          `json:"solution_stub"`
+	DriverCode        string          `json:"driver_code"`
+	TimeConstraintMs  int32           `json:"time_constraint_ms"`
+	SpaceConstraintMb int32           `json:"space_constraint_mb"`
+	TestCases         []TestCaseInput `json:"test_cases"`
+	SolutionCode      string          `json:"solution_code"` // Test solution for this language
+}
+
+type TestCaseInput struct {
+	Input          string `json:"input"`
+	ExpectedOutput string `json:"expected_output"`
+	IsHidden       bool   `json:"is_hidden"`
+}
+
+type CreateProblemResponse struct {
+	ProblemID   string                     `json:"problem_id"`
+	Title       string                     `json:"title"`
+	TestResults *ExecutionValidationResult `json:"test_results"`
+}
+
+type ExecutionValidationResult struct {
+	Success      bool   `json:"success"`
+	Message      string `json:"message"`
+	PassedTests  int    `json:"passed_tests"`
+	TotalTests   int    `json:"total_tests"`
+	ExecutionLog string `json:"execution_log,omitempty"`
+}
+
+// CreateProblemHandler creates a new code problem with language details and test cases
+// This handler is for admin use only
+func (hr *HandlerRepo) CreateProblemHandler(w http.ResponseWriter, r *http.Request) {
+	var req CreateProblemRequest
+	if err := request.DecodeJSON(w, r, &req); err != nil {
+		hr.badRequest(w, r, ErrInvalidRequest)
+		return
+	}
+
+	// Validate request
+	if err := validateCreateProblemRequest(&req); err != nil {
+		hr.badRequest(w, r, err)
+		return
+	}
+
+	// Validate test solutions for all languages before creating the problem
+	validationResults, err := hr.validateAllTestSolutions(r.Context(), &req)
+	if err != nil {
+		hr.logger.Error("failed to validate test solutions", "err", err)
+		hr.serverError(w, r, errors.New("failed to validate test solutions"))
+		return
+	}
+
+	// Check if all validations passed
+	allPassed := true
+	for _, result := range validationResults {
+		if !result.Success {
+			allPassed = false
+			break
+		}
+	}
+
+	if !allPassed {
+		hr.logger.Warn("test solution validation failed for one or more languages")
+		err = response.JSON(w, response.JSONResponseParameters{
+			Status:  http.StatusBadRequest,
+			Success: false,
+			Msg:     "Test solution validation failed for one or more languages",
+			Data: map[string]interface{}{
+				"validation_results": validationResults,
+			},
+		})
+		if err != nil {
+			hr.serverError(w, r, err)
+		}
+		return
+	}
+
+	// Start transaction to create problem with all its details
+	tx, err := hr.db.Begin(r.Context())
+	if err != nil {
+		hr.serverError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := hr.queries.WithTx(tx)
+
+	// Create the code problem
+	problem, err := qtx.CreateCodeProblem(r.Context(), store.CreateCodeProblemParams{
+		Title:            req.Title,
+		ProblemStatement: req.ProblemStatement,
+		Difficulty:       req.Difficulty,
+	})
+	if err != nil {
+		hr.logger.Error("failed to create code problem", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	hr.logger.Info("created code problem", "problem_id", problem.ID.Bytes)
+
+	// Create problem tags
+	for _, tagIDStr := range req.TagIDs {
+		tagID, err := uuid.Parse(tagIDStr)
+		if err != nil {
+			hr.badRequest(w, r, fmt.Errorf("invalid tag_id: %s", tagIDStr))
+			return
+		}
+
+		err = qtx.CreateCodeProblemTag(r.Context(), store.CreateCodeProblemTagParams{
+			CodeProblemID: problem.ID,
+			TagID:         toPgtypeUUID(tagID),
+		})
+		if err != nil {
+			hr.logger.Error("failed to create problem tag", "err", err, "tag_id", tagID)
+			hr.serverError(w, r, err)
+			return
+		}
+	}
+
+	// Create language details and test cases for each language
+	for _, langDetail := range req.LanguageDetails {
+		langID, err := uuid.Parse(langDetail.LanguageID)
+		if err != nil {
+			hr.badRequest(w, r, fmt.Errorf("invalid language_id: %s", langDetail.LanguageID))
+			return
+		}
+
+		// Create language detail
+		_, err = qtx.CreateCodeProblemLanguageDetail(r.Context(), store.CreateCodeProblemLanguageDetailParams{
+			CodeProblemID:     problem.ID,
+			LanguageID:        toPgtypeUUID(langID),
+			SolutionStub:      langDetail.SolutionStub,
+			DriverCode:        langDetail.DriverCode,
+			TimeConstraintMs:  langDetail.TimeConstraintMs,
+			SpaceConstraintMb: langDetail.SpaceConstraintMb,
+		})
+		if err != nil {
+			hr.logger.Error("failed to create language detail", "err", err, "language_id", langID)
+			hr.serverError(w, r, err)
+			return
+		}
+
+		// Create test cases for this language
+		for _, testCase := range langDetail.TestCases {
+			_, err = qtx.CreateTestCase(r.Context(), store.CreateTestCaseParams{
+				CodeProblemID:  problem.ID,
+				Input:          testCase.Input,
+				ExpectedOutput: testCase.ExpectedOutput,
+				IsHidden:       testCase.IsHidden,
+			})
+			if err != nil {
+				hr.logger.Error("failed to create test case", "err", err)
+				hr.serverError(w, r, err)
+				return
+			}
+		}
+
+		hr.logger.Info("created language details and test cases",
+			"problem_id", problem.ID.Bytes,
+			"language_id", langID,
+			"test_cases_count", len(langDetail.TestCases))
+	}
+
+	// Commit transaction
+	if err = tx.Commit(r.Context()); err != nil {
+		hr.serverError(w, r, err)
+		return
+	}
+
+	hr.logger.Info("successfully created code problem with all details",
+		"problem_id", problem.ID.Bytes,
+		"title", problem.Title)
+
+	err = response.JSON(w, response.JSONResponseParameters{
+		Status:  http.StatusCreated,
+		Success: true,
+		Msg:     "Code problem created successfully",
+		Data: map[string]interface{}{
+			"problem_id":         uuid.UUID(problem.ID.Bytes).String(),
+			"title":              problem.Title,
+			"validation_results": validationResults,
+		},
+	})
+	if err != nil {
+		hr.serverError(w, r, err)
+	}
+}
+
+// validateCreateProblemRequest validates the create problem request
+func validateCreateProblemRequest(req *CreateProblemRequest) error {
+	if req.Title == "" {
+		return errors.New("title is required")
+	}
+	if req.ProblemStatement == "" {
+		return errors.New("problem_statement is required")
+	}
+	if req.Difficulty < 1 || req.Difficulty > 3 {
+		return errors.New("difficulty must be between 1 and 3")
+	}
+	if len(req.LanguageDetails) == 0 {
+		return errors.New("at least one language detail is required")
+	}
+
+	// Validate each language detail
+	for i, langDetail := range req.LanguageDetails {
+		if langDetail.LanguageID == "" {
+			return fmt.Errorf("language_details[%d].language_id is required", i)
+		}
+		if langDetail.SolutionCode == "" {
+			return fmt.Errorf("language_details[%d].solution_code is required", i)
+		}
+		if len(langDetail.TestCases) == 0 {
+			return fmt.Errorf("language_details[%d] must have at least one test case", i)
+		}
+		for j, testCase := range langDetail.TestCases {
+			if testCase.Input == "" {
+				return fmt.Errorf("language_details[%d].test_cases[%d].input is required", i, j)
+			}
+			if testCase.ExpectedOutput == "" {
+				return fmt.Errorf("language_details[%d].test_cases[%d].expected_output is required", i, j)
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateAllTestSolutions validates test solutions for all languages
+func (hr *HandlerRepo) validateAllTestSolutions(ctx context.Context, req *CreateProblemRequest) (map[string]*ExecutionValidationResult, error) {
+	results := make(map[string]*ExecutionValidationResult)
+
+	for _, langDetail := range req.LanguageDetails {
+		result, err := hr.validateTestSolution(ctx, &langDetail)
+		if err != nil {
+			return nil, fmt.Errorf("failed to validate solution for language %s: %w", langDetail.LanguageID, err)
+		}
+		results[langDetail.LanguageID] = result
+	}
+
+	return results, nil
+}
+
+// validateTestSolution runs a single language's test solution against its test cases using the executor
+func (hr *HandlerRepo) validateTestSolution(ctx context.Context, langDetail *ProblemLanguageDetailInput) (*ExecutionValidationResult, error) {
+	// Get language information from database
+	langID, err := uuid.Parse(langDetail.LanguageID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid language_id: %w", err)
+	}
+
+	lang, err := hr.queries.GetLanguageByID(ctx, toPgtypeUUID(langID))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get language: %w", err)
+	}
+
+	// Convert test cases to protobuf format
+	pbTestCases := make([]*pb.TestCase, len(langDetail.TestCases))
+	for i, tc := range langDetail.TestCases {
+		pbTestCases[i] = &pb.TestCase{
+			Input:          tc.Input,
+			ExpectedOutput: tc.ExpectedOutput,
+		}
+	}
+
+	// Execute the test solution
+	execRequest := &pb.ExecuteRequest{
+		Language:     lang.Name,
+		Code:         langDetail.SolutionCode,
+		DriverCode:   langDetail.DriverCode,
+		CompileCmd:   lang.CompileCmd,
+		RunCmd:       lang.RunCmd,
+		TempFileDir:  lang.TempFileDir.String,
+		TempFileName: lang.TempFileName.String,
+		TestCases:    pbTestCases,
+	}
+
+	hr.logger.Info("validating test solution", "language", lang.Name, "test_cases", len(pbTestCases))
+
+	execResult, err := hr.executorClient.ExecuteCode(ctx, execRequest)
+	if err != nil {
+		return nil, fmt.Errorf("executor failed: %w", err)
+	}
+
+	// Analyze execution result
+	totalTests := len(pbTestCases)
+	executionLog := fmt.Sprintf("stdout: %s\nstderr: %s\nmessage: %s\n",
+		execResult.Stdout, execResult.Stderr, execResult.Message)
+
+	validationResult := &ExecutionValidationResult{
+		Success:      execResult.Success,
+		TotalTests:   totalTests,
+		ExecutionLog: executionLog,
+	}
+
+	if execResult.Success {
+		validationResult.PassedTests = totalTests
+		validationResult.Message = fmt.Sprintf("All %d test cases passed successfully", totalTests)
+	} else {
+		validationResult.PassedTests = 0
+		validationResult.Message = fmt.Sprintf("Test solution failed: %s (error: %s)",
+			execResult.Message, execResult.ErrorType)
+	}
+
+	return validationResult, nil
 }

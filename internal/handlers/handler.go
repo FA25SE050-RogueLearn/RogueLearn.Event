@@ -19,6 +19,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// EventConfig holds configuration for event-related settings
+type EventConfig struct {
+	AssignmentDelayMinutes int // Delay before event start for guild-to-room assignment
+}
+
 // HandlerRepo holds all the dependencies required by the handlers.
 // This includes the application logger, services like the RoomManager,
 // and the centralized store for data access.
@@ -31,6 +36,7 @@ type HandlerRepo struct {
 	rabbitClient   *rabbitmq.RabbitMQClient
 	executorClient *executor.Client
 	userClient     *user.Client
+	eventConfig    EventConfig
 }
 
 // NewHandlerRepo creates a new HandlerRepo with the provided dependencies.
@@ -62,6 +68,11 @@ func NewHandlerRepo(ctx context.Context, logger *slog.Logger, db *pgxpool.Pool, 
 	// Check every 5 minutes, remove rooms inactive for more than 30 minutes
 	go eventHub.StartInactiveRoomCleanup(ctx, 5*time.Minute, 30*time.Minute)
 
+	// Load event configuration from environment variables
+	assignmentDelayMinutes := env.GetInt("EVENT_ASSIGNMENT_DELAY_MINUTES", 5)
+	logger.Info("Event configuration loaded",
+		"assignment_delay_minutes", assignmentDelayMinutes)
+
 	return &HandlerRepo{
 		logger:         logger,
 		db:             db,
@@ -71,6 +82,9 @@ func NewHandlerRepo(ctx context.Context, logger *slog.Logger, db *pgxpool.Pool, 
 		rabbitClient:   rabbitClient,
 		executorClient: executorClient,
 		userClient:     userClient,
+		eventConfig: EventConfig{
+			AssignmentDelayMinutes: assignmentDelayMinutes,
+		},
 	}
 }
 

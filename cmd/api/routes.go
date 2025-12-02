@@ -59,7 +59,7 @@ func (app *Application) routes() http.Handler {
 		r.With(app.handlers.GuildMasterOnly).Post("/", app.handlers.CreateEventHandler)
 
 		// Requester: View their own submitted requests
-		r.With(app.handlers.AdminOnly).Get("/{guild_id}", app.handlers.GetMyEventRequestsHandler)
+		r.With(app.handlers.GuildMasterOnly).Get("/{guild_id}", app.handlers.GetMyEventRequestsHandler)
 	})
 
 	// Admin routes - require authentication AND "Game Master" role
@@ -85,7 +85,11 @@ func (app *Application) routes() http.Handler {
 		r.Get("/{problem_id}/details", app.handlers.GetProblemDetails)
 
 		// Auth-protected routes for problem submissions
-		r.With(app.handlers.AuthMiddleware).Get("/{problem_id}/submissions", app.handlers.GetMySubmissionsByProblemHandler)
+		r.Group(func(r chi.Router) {
+			r.Use(app.handlers.AuthMiddleware)
+			r.Get("/{problem_id}/submissions", app.handlers.GetMySubmissionsByProblemHandler)
+			r.With(app.handlers.AdminOnly).Post("/", app.handlers.CreateProblemHandler)
+		})
 	})
 
 	mux.Route("/tags", func(r chi.Router) {

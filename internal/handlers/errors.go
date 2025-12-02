@@ -29,7 +29,9 @@ func (hr *HandlerRepo) reportServerError(r *http.Request, err error) {
 }
 
 func (hr *HandlerRepo) errorMessage(w http.ResponseWriter, r *http.Request, status int, message string, headers http.Header) {
-	message = strings.ToUpper(message[:1]) + message[1:]
+	if len(message) > 0 {
+		message = strings.ToUpper(message[:1]) + message[1:]
+	}
 
 	err := response.JSONWithHeaders(w, response.JSONResponseParameters{
 		Success: false,
