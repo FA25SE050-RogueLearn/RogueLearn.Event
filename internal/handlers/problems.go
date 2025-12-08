@@ -14,13 +14,15 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type CodeProblemResponse struct {
-	ID               uuid.UUID `json:"id"`
-	Title            string    `json:"title"`
-	ProblemStatement string    `json:"problem_statement"`
-	Difficulty       int32     `json:"difficulty"`
+	ID                 uuid.UUID `json:"id"`
+	Title              string    `json:"title"`
+	ProblemStatement   string    `json:"problem_statement"`
+	Difficulty         int32     `json:"difficulty"`
+	SupportedLanguages []string  `json:"supported_languages"`
 }
 
 func (hr *HandlerRepo) GetProblemsHandler(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +43,26 @@ func (hr *HandlerRepo) GetProblemsHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	paginatedResponse := createPaginationResponse(toProblemResponses(problems), totalCount, pagination)
+	// Fetch supported languages for all problems
+	problemIDs := make([]pgtype.UUID, len(problems))
+	for i, p := range problems {
+		problemIDs[i] = p.ID
+	}
+
+	supportedLangs, err := hr.queries.GetSupportedLanguagesForProblems(r.Context(), problemIDs)
+	if err != nil {
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Build a map of problem ID to supported languages
+	langMap := make(map[uuid.UUID][]string)
+	for _, sl := range supportedLangs {
+		pid := sl.CodeProblemID.Bytes
+		langMap[pid] = append(langMap[pid], sl.LanguageName)
+	}
+
+	paginatedResponse := createPaginationResponse(toProblemResponsesWithLanguages(problems, langMap), totalCount, pagination)
 
 	err = response.JSON(w, response.JSONResponseParameters{
 		Status:  http.StatusOK,
@@ -105,14 +126,35 @@ func (hr *HandlerRepo) GetEventProblemsHandler(w http.ResponseWriter, r *http.Re
 
 	hr.logger.Info("event code problems found", "event_code_problems", cps)
 
+	// Fetch supported languages for all problems
+	problemIDs := make([]pgtype.UUID, len(cps))
+	for i, cp := range cps {
+		problemIDs[i] = cp.CodeProblemID
+	}
+
+	supportedLangs, err := hr.queries.GetSupportedLanguagesForProblems(r.Context(), problemIDs)
+	if err != nil {
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Build a map of problem ID to supported languages
+	langMap := make(map[uuid.UUID][]string)
+	for _, sl := range supportedLangs {
+		pid := sl.CodeProblemID.Bytes
+		langMap[pid] = append(langMap[pid], sl.LanguageName)
+	}
+
 	// Convert to CodeProblemResponse slice
 	problemResponses := make([]CodeProblemResponse, len(cps))
 	for i, cp := range cps {
+		pid := cp.CodeProblemID.Bytes
 		problemResponses[i] = CodeProblemResponse{
-			ID:               cp.CodeProblemID.Bytes,
-			Title:            cp.Title,
-			ProblemStatement: cp.ProblemStatement,
-			Difficulty:       cp.Difficulty,
+			ID:                 pid,
+			Title:              cp.Title,
+			ProblemStatement:   cp.ProblemStatement,
+			Difficulty:         cp.Difficulty,
+			SupportedLanguages: langMap[pid],
 		}
 	}
 
@@ -242,6 +284,162 @@ func toTagResponses(rows []store.GetTagsWithProblemCountsRow) []TagResponse {
 	return responses
 }
 
+type CreateTagRequest struct {
+	Name string `json:"name"`
+}
+
+type UpdateTagRequest struct {
+	Name string `json:"name"`
+}
+
+type TagSimpleResponse struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
+func (hr *HandlerRepo) CreateTagHandler(w http.ResponseWriter, r *http.Request) {
+	var req CreateTagRequest
+	if err := request.DecodeJSON(w, r, &req); err != nil {
+		hr.badRequest(w, r, ErrInvalidRequest)
+		return
+	}
+
+	if req.Name == "" {
+		hr.badRequest(w, r, errors.New("tag name cannot be empty"))
+		return
+	}
+
+	// Check if tag with same name already exists
+	_, err := hr.queries.GetTagByName(r.Context(), req.Name)
+	if err == nil {
+		hr.badRequest(w, r, errors.New("tag with this name already exists"))
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		hr.serverError(w, r, err)
+		return
+	}
+
+	tag, err := hr.queries.CreateTag(r.Context(), req.Name)
+	if err != nil {
+		hr.serverError(w, r, err)
+		return
+	}
+
+	err = response.JSON(w, response.JSONResponseParameters{
+		Status: http.StatusCreated,
+		Data: TagSimpleResponse{
+			ID:   tag.ID.Bytes,
+			Name: tag.Name,
+		},
+		Success: true,
+		Msg:     "Tag created successfully",
+	})
+	if err != nil {
+		hr.serverError(w, r, err)
+	}
+}
+
+func (hr *HandlerRepo) UpdateTagHandler(w http.ResponseWriter, r *http.Request) {
+	tagIDStr := chi.URLParam(r, "tag_id")
+	tagID, err := uuid.Parse(tagIDStr)
+	if err != nil {
+		hr.badRequest(w, r, errors.New("invalid tag ID"))
+		return
+	}
+
+	var req UpdateTagRequest
+	if err := request.DecodeJSON(w, r, &req); err != nil {
+		hr.badRequest(w, r, ErrInvalidRequest)
+		return
+	}
+
+	if req.Name == "" {
+		hr.badRequest(w, r, errors.New("tag name cannot be empty"))
+		return
+	}
+
+	// Check if tag exists
+	_, err = hr.queries.GetTagByID(r.Context(), toPgtypeUUID(tagID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			hr.notFound(w, r)
+			return
+		}
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Check if another tag with the same name exists
+	existingTag, err := hr.queries.GetTagByName(r.Context(), req.Name)
+	if err == nil && existingTag.ID.Bytes != tagID {
+		hr.badRequest(w, r, errors.New("tag with this name already exists"))
+		return
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		hr.serverError(w, r, err)
+		return
+	}
+
+	tag, err := hr.queries.UpdateTag(r.Context(), store.UpdateTagParams{
+		ID:   toPgtypeUUID(tagID),
+		Name: req.Name,
+	})
+	if err != nil {
+		hr.serverError(w, r, err)
+		return
+	}
+
+	err = response.JSON(w, response.JSONResponseParameters{
+		Status: http.StatusOK,
+		Data: TagSimpleResponse{
+			ID:   tag.ID.Bytes,
+			Name: tag.Name,
+		},
+		Success: true,
+		Msg:     "Tag updated successfully",
+	})
+	if err != nil {
+		hr.serverError(w, r, err)
+	}
+}
+
+func (hr *HandlerRepo) DeleteTagHandler(w http.ResponseWriter, r *http.Request) {
+	tagIDStr := chi.URLParam(r, "tag_id")
+	tagID, err := uuid.Parse(tagIDStr)
+	if err != nil {
+		hr.badRequest(w, r, errors.New("invalid tag ID"))
+		return
+	}
+
+	// Check if tag exists
+	_, err = hr.queries.GetTagByID(r.Context(), toPgtypeUUID(tagID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			hr.notFound(w, r)
+			return
+		}
+		hr.serverError(w, r, err)
+		return
+	}
+
+	err = hr.queries.DeleteTag(r.Context(), toPgtypeUUID(tagID))
+	if err != nil {
+		hr.serverError(w, r, err)
+		return
+	}
+
+	err = response.JSON(w, response.JSONResponseParameters{
+		Status:  http.StatusOK,
+		Data:    nil,
+		Success: true,
+		Msg:     "Tag deleted successfully",
+	})
+	if err != nil {
+		hr.serverError(w, r, err)
+	}
+}
+
 func toProblemResponse(problem store.CodeProblem) CodeProblemResponse {
 	return CodeProblemResponse{
 		Title:            problem.Title,
@@ -258,6 +456,21 @@ func toProblemResponses(problems []store.CodeProblem) []CodeProblemResponse {
 			Title:            problem.Title,
 			ProblemStatement: problem.ProblemStatement,
 			Difficulty:       problem.Difficulty,
+		}
+	}
+	return responses
+}
+
+func toProblemResponsesWithLanguages(problems []store.CodeProblem, langMap map[uuid.UUID][]string) []CodeProblemResponse {
+	responses := make([]CodeProblemResponse, len(problems))
+	for i, problem := range problems {
+		pid := problem.ID.Bytes
+		responses[i] = CodeProblemResponse{
+			ID:                 pid,
+			Title:              problem.Title,
+			ProblemStatement:   problem.ProblemStatement,
+			Difficulty:         problem.Difficulty,
+			SupportedLanguages: langMap[pid],
 		}
 	}
 	return responses
@@ -467,6 +680,173 @@ func (hr *HandlerRepo) CreateProblemHandler(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		hr.serverError(w, r, err)
 	}
+}
+
+type UpdateProblemRequest struct {
+	Title            string   `json:"title"`
+	ProblemStatement string   `json:"problem_statement"`
+	Difficulty       int32    `json:"difficulty"`
+	TagIDs           []string `json:"tag_ids"`
+}
+
+// UpdateProblemHandler updates an existing code problem's basic information
+// This handler is for admin use only
+func (hr *HandlerRepo) UpdateProblemHandler(w http.ResponseWriter, r *http.Request) {
+	problemIDStr := chi.URLParam(r, "problem_id")
+	problemID, err := uuid.Parse(problemIDStr)
+	if err != nil {
+		hr.badRequest(w, r, errors.New("invalid problem ID"))
+		return
+	}
+
+	var req UpdateProblemRequest
+	if err := request.DecodeJSON(w, r, &req); err != nil {
+		hr.badRequest(w, r, ErrInvalidRequest)
+		return
+	}
+
+	// Validate request
+	if err := validateUpdateProblemRequest(&req); err != nil {
+		hr.badRequest(w, r, err)
+		return
+	}
+
+	// Check if problem exists
+	_, err = hr.queries.GetCodeProblemByID(r.Context(), toPgtypeUUID(problemID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			hr.notFound(w, r)
+			return
+		}
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Start transaction to update problem with its tags
+	tx, err := hr.db.Begin(r.Context())
+	if err != nil {
+		hr.serverError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := hr.queries.WithTx(tx)
+
+	// Update the code problem
+	problem, err := qtx.UpdateCodeProblem(r.Context(), store.UpdateCodeProblemParams{
+		ID:               toPgtypeUUID(problemID),
+		Title:            req.Title,
+		ProblemStatement: req.ProblemStatement,
+		Difficulty:       req.Difficulty,
+	})
+	if err != nil {
+		hr.logger.Error("failed to update code problem", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Delete existing problem tags and recreate
+	err = qtx.DeleteCodeProblemTagsByProblemID(r.Context(), problem.ID)
+	if err != nil {
+		hr.logger.Error("failed to delete problem tags", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	// Create problem tags
+	for _, tagIDStr := range req.TagIDs {
+		tagID, err := uuid.Parse(tagIDStr)
+		if err != nil {
+			hr.badRequest(w, r, fmt.Errorf("invalid tag_id: %s", tagIDStr))
+			return
+		}
+
+		err = qtx.CreateCodeProblemTag(r.Context(), store.CreateCodeProblemTagParams{
+			CodeProblemID: problem.ID,
+			TagID:         toPgtypeUUID(tagID),
+		})
+		if err != nil {
+			hr.logger.Error("failed to create problem tag", "err", err, "tag_id", tagID)
+			hr.serverError(w, r, err)
+			return
+		}
+	}
+
+	// Commit transaction
+	if err = tx.Commit(r.Context()); err != nil {
+		hr.serverError(w, r, err)
+		return
+	}
+
+	hr.logger.Info("successfully updated code problem",
+		"problem_id", problem.ID.Bytes,
+		"title", problem.Title)
+
+	err = response.JSON(w, response.JSONResponseParameters{
+		Status:  http.StatusOK,
+		Success: true,
+		Msg:     "Code problem updated successfully",
+		Data: map[string]interface{}{
+			"problem_id": uuid.UUID(problem.ID.Bytes).String(),
+			"title":      problem.Title,
+		},
+	})
+	if err != nil {
+		hr.serverError(w, r, err)
+	}
+}
+
+// DeleteProblemHandler deletes an existing code problem
+// This handler is for admin use only
+func (hr *HandlerRepo) DeleteProblemHandler(w http.ResponseWriter, r *http.Request) {
+	problemIDStr := chi.URLParam(r, "problem_id")
+	problemID, err := uuid.Parse(problemIDStr)
+	if err != nil {
+		hr.badRequest(w, r, errors.New("invalid problem ID"))
+		return
+	}
+
+	// Check if problem exists
+	_, err = hr.queries.GetCodeProblemByID(r.Context(), toPgtypeUUID(problemID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			hr.notFound(w, r)
+			return
+		}
+		hr.serverError(w, r, err)
+		return
+	}
+
+	err = hr.queries.DeleteCodeProblem(r.Context(), toPgtypeUUID(problemID))
+	if err != nil {
+		hr.serverError(w, r, err)
+		return
+	}
+
+	hr.logger.Info("successfully deleted code problem", "problem_id", problemID)
+
+	err = response.JSON(w, response.JSONResponseParameters{
+		Status:  http.StatusOK,
+		Data:    nil,
+		Success: true,
+		Msg:     "Code problem deleted successfully",
+	})
+	if err != nil {
+		hr.serverError(w, r, err)
+	}
+}
+
+// validateUpdateProblemRequest validates the update problem request
+func validateUpdateProblemRequest(req *UpdateProblemRequest) error {
+	if req.Title == "" {
+		return errors.New("title is required")
+	}
+	if req.ProblemStatement == "" {
+		return errors.New("problem_statement is required")
+	}
+	if req.Difficulty < 1 || req.Difficulty > 3 {
+		return errors.New("difficulty must be between 1 and 3")
+	}
+	return nil
 }
 
 // validateCreateProblemRequest validates the create problem request

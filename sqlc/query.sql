@@ -274,6 +274,12 @@ FROM code_problem_language_details cpld
 JOIN languages l ON cpld.language_id = l.id
 WHERE cpld.code_problem_id = $1;
 
+-- name: GetSupportedLanguagesForProblems :many
+SELECT cpld.code_problem_id, l.name as language_name
+FROM code_problem_language_details cpld
+JOIN languages l ON cpld.language_id = l.id
+WHERE cpld.code_problem_id = ANY($1::uuid[]);
+
 -- name: UpdateCodeProblemLanguageDetail :one
 UPDATE code_problem_language_details
 SET solution_stub = $3, driver_code = $4, time_constraint_ms = $5, space_constraint_mb = $6
@@ -307,6 +313,10 @@ ORDER BY cp.created_at DESC;
 DELETE FROM code_problem_tags
 WHERE code_problem_id = $1 AND tag_id = $2;
 
+-- name: DeleteCodeProblemTagsByProblemID :exec
+DELETE FROM code_problem_tags
+WHERE code_problem_id = $1;
+
 -- Test Cases
 -- name: CreateTestCase :one
 INSERT INTO test_cases (code_problem_id, input, expected_output, is_hidden)
@@ -334,6 +344,9 @@ RETURNING *;
 
 -- name: DeleteTestCase :exec
 DELETE FROM test_cases WHERE id = $1;
+
+-- name: DeleteTestCasesByProblemID :exec
+DELETE FROM test_cases WHERE code_problem_id = $1;
 
 -- Rooms
 -- name: CreateRoom :one

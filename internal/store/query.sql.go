@@ -957,6 +957,16 @@ func (q *Queries) DeleteCodeProblemTag(ctx context.Context, arg DeleteCodeProble
 	return err
 }
 
+const deleteCodeProblemTagsByProblemID = `-- name: DeleteCodeProblemTagsByProblemID :exec
+DELETE FROM code_problem_tags
+WHERE code_problem_id = $1
+`
+
+func (q *Queries) DeleteCodeProblemTagsByProblemID(ctx context.Context, codeProblemID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteCodeProblemTagsByProblemID, codeProblemID)
+	return err
+}
+
 const deleteEvent = `-- name: DeleteEvent :exec
 DELETE FROM events WHERE id = $1
 `
@@ -1073,6 +1083,15 @@ DELETE FROM test_cases WHERE id = $1
 
 func (q *Queries) DeleteTestCase(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteTestCase, id)
+	return err
+}
+
+const deleteTestCasesByProblemID = `-- name: DeleteTestCasesByProblemID :exec
+DELETE FROM test_cases WHERE code_problem_id = $1
+`
+
+func (q *Queries) DeleteTestCasesByProblemID(ctx context.Context, codeProblemID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteTestCasesByProblemID, codeProblemID)
 	return err
 }
 
@@ -3445,6 +3464,38 @@ func (q *Queries) GetSubmissionsByUserAndProblem(ctx context.Context, arg GetSub
 			&i.ProblemTitle,
 			&i.LanguageName,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getSupportedLanguagesForProblems = `-- name: GetSupportedLanguagesForProblems :many
+SELECT cpld.code_problem_id, l.name as language_name
+FROM code_problem_language_details cpld
+JOIN languages l ON cpld.language_id = l.id
+WHERE cpld.code_problem_id = ANY($1::uuid[])
+`
+
+type GetSupportedLanguagesForProblemsRow struct {
+	CodeProblemID pgtype.UUID
+	LanguageName  string
+}
+
+func (q *Queries) GetSupportedLanguagesForProblems(ctx context.Context, dollar_1 []pgtype.UUID) ([]GetSupportedLanguagesForProblemsRow, error) {
+	rows, err := q.db.Query(ctx, getSupportedLanguagesForProblems, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetSupportedLanguagesForProblemsRow
+	for rows.Next() {
+		var i GetSupportedLanguagesForProblemsRow
+		if err := rows.Scan(&i.CodeProblemID, &i.LanguageName); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

@@ -89,11 +89,20 @@ func (app *Application) routes() http.Handler {
 			r.Use(app.handlers.AuthMiddleware)
 			r.Get("/{problem_id}/submissions", app.handlers.GetMySubmissionsByProblemHandler)
 			r.With(app.handlers.AdminOnly).Post("/", app.handlers.CreateProblemHandler)
+			r.With(app.handlers.AdminOnly).Put("/{problem_id}", app.handlers.UpdateProblemHandler)
+			r.With(app.handlers.AdminOnly).Delete("/{problem_id}", app.handlers.DeleteProblemHandler)
 		})
 	})
 
 	mux.Route("/tags", func(r chi.Router) {
 		r.Get("/", app.handlers.GetTagsHandler)
+
+		r.Group(func(r chi.Router) {
+			r.Use(app.handlers.AuthMiddleware)
+			r.With(app.handlers.AdminOnly).Post("/", app.handlers.CreateTagHandler)
+			r.With(app.handlers.AdminOnly).Put("/{tag_id}", app.handlers.UpdateTagHandler)
+			r.With(app.handlers.AdminOnly).Delete("/{tag_id}", app.handlers.DeleteTagHandler)
+		})
 	})
 
 	mux.Route("/health", func(r chi.Router) {
