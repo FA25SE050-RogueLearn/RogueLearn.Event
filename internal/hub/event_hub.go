@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
@@ -1993,9 +1992,6 @@ func (r *RoomHub) processPlayerJoined(event events.PlayerJoined) error {
 	})
 	if err == pgx.ErrNoRows {
 		r.logger.Info("Player not found in room", "room_id", event.RoomID, "player_id", event.PlayerID)
-		s := rand.NewPCG(uint64(time.Now().UnixNano()), 0)
-		rand := rand.New(s)
-		fmt.Println(rand.IntN(100))
 
 		if err := r.addPlayerToRoom(ctx, event.PlayerGuildID, event.RoomID, event.PlayerID, event.PlayerName); err != nil {
 			r.logger.Error("Failed to add player to room", "room_id", event.RoomID, "player_id", event.PlayerID, "error", err)
@@ -2076,28 +2072,6 @@ func (r *RoomHub) processPlayerLeft(event events.PlayerLeft) error {
 
 	// Process the player left event
 	data := fmt.Sprintf("playerId:%d,roomId:%d\n\n", event.PlayerID, r.RoomID)
-
-	// change status to disconnect instead of remove
-	_, err := r.queries.UpdateRoomPlayerState(ctx, store.UpdateRoomPlayerStateParams{
-		RoomID: toPgtypeUUID(event.RoomID),
-		UserID: toPgtypeUUID(event.PlayerID),
-		State:  store.RoomPlayerStateDisconnected,
-	})
-
-	if err != nil {
-		r.logger.Error("failed to update player state",
-			"error", err,
-			"player_id", event.PlayerID,
-			"room_id", event.RoomID,
-			"state", store.RoomPlayerStateDisconnected,
-		)
-	}
-
-	// Recalculate leaderboard after a player leaves
-	err = r.calculateLeaderboard(ctx)
-	if err != nil {
-		r.logger.Error("failed to calculate leaderboard after player left", "error", err)
-	}
 
 	entries, err := r.getRoomLeaderboardEntries(ctx)
 	if err != nil {

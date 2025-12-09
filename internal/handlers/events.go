@@ -399,22 +399,35 @@ func validDate(req EventCreationRequest) (valid bool, msg string) {
 		return false, "Proposed end date cannot be in the past"
 	}
 
-	return true, ""
+	return valid, msg
 }
 
 // GetMyEventRequestsHandler fetches a list of event requests submitted by a specific guild.
 func (hr *HandlerRepo) GetMyEventRequestsHandler(w http.ResponseWriter, r *http.Request) {
-	// In a real application, this would come from JWT claims or session.
-	// For this example, we'll use a query parameter.
-	guildIDStr := chi.URLParam(r, "guild_id")
-	if guildIDStr == "" {
-		hr.badRequest(w, r, errors.New("guild_id query parameter is required"))
+	// Get Guild Master ID from JWT claims
+	userClaims, err := GetUserClaims(r.Context())
+	if err != nil {
+		hr.logger.Debug("Invalid claims", "err", err)
+		hr.unauthorized(w, r)
 		return
 	}
 
-	guildID, err := uuid.Parse(guildIDStr)
+	// Get guild ID via gRPC
+	ctx, cancel := context.WithTimeout(r.Context(), DefaultQueryTimeoutSecond)
+	defer cancel()
+	guild, err := hr.userClient.GetMyGuild(ctx, &protos.GetMyGuildRequest{
+		AuthUserId: userClaims.Sub,
+	})
 	if err != nil {
-		hr.badRequest(w, r, errors.New("invalid guild_id format"))
+		hr.logger.Error("failed to get guild", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	guildID, err := uuid.Parse(guild.Id)
+	if err != nil {
+		hr.logger.Error("failed to parse guild ID", "err", err)
+		hr.serverError(w, r, err)
 		return
 	}
 
@@ -583,10 +596,8 @@ func (hr *HandlerRepo) RegisterGuildToEventHandler(w http.ResponseWriter, r *htt
 
 	// room_id will be known later (assigned at assignment_date)
 	_, err = qtx.CreateEventGuildParticipant(r.Context(), store.CreateEventGuildParticipantParams{
-		EventID:   toPgtypeUUID(eventID),
-		GuildID:   toPgtypeUUID(guildID),
-		RoomID:    pgtype.UUID{Valid: false},
-		GuildName: pgtype.Text{String: guild.Name, Valid: guild.Name != ""},
+		EventID: toPgtypeUUID(eventID),
+		GuildID: toPgtypeUUID(guildID),
 	})
 	if err != nil {
 		// Check for duplicate registration and provide friendly error
@@ -1320,19 +1331,6 @@ func (hr *HandlerRepo) LeaveRoomHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	} else if err != nil {
 		hr.logger.Error("failed to get room player", "err", err)
-		hr.serverError(w, r, err)
-		return
-	}
-
-	// Update the room_player state to 'left' (user is deliberately leaving)
-	// We don't delete the record to maintain history and prevent rejoining
-	_, err = hr.queries.UpdateRoomPlayerState(r.Context(), store.UpdateRoomPlayerStateParams{
-		RoomID: toPgtypeUUID(roomID),
-		UserID: toPgtypeUUID(userID),
-		State:  store.RoomPlayerStateLeft,
-	})
-	if err != nil {
-		hr.logger.Error("failed to update room player state to left", "err", err)
 		hr.serverError(w, r, err)
 		return
 	}

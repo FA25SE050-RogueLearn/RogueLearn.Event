@@ -59,7 +59,7 @@ func (app *Application) routes() http.Handler {
 		r.With(app.handlers.GuildMasterOnly).Post("/", app.handlers.CreateEventHandler)
 
 		// Requester: View their own submitted requests
-		r.With(app.handlers.GuildMasterOnly).Get("/{guild_id}", app.handlers.GetMyEventRequestsHandler)
+		r.With(app.handlers.GuildMasterOnly).Get("/my", app.handlers.GetMyEventRequestsHandler)
 	})
 
 	// Admin routes - require authentication AND "Game Master" role

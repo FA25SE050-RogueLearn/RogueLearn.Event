@@ -259,6 +259,11 @@ func (hr *HandlerRepo) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 		delete(roomHub.Listerners, userID)
 		roomHub.Mu.Unlock()
 		go func() {
+			hr.queries.UpdateRoomPlayerState(context.Background(), store.UpdateRoomPlayerStateParams{
+				RoomID: toPgtypeUUID(roomID),
+				UserID: toPgtypeUUID(userID),
+				State:  store.RoomPlayerStateDisconnected,
+			})
 			roomHub.Events <- events.PlayerLeft{PlayerID: userID, RoomID: roomID}
 		}()
 	}()
