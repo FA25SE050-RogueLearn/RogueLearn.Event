@@ -171,6 +171,7 @@ type EventDetailsResponse struct {
 	AssignmentDate      *time.Time `json:"assignment_date,omitempty"`
 	GuildsLeft          *int32     `json:"guilds_left"`
 	CurrentParticipants int64      `json:"current_participants"`
+	RemainingSlot       *int32     `json:"remaining_slot"`
 }
 
 func (hr *HandlerRepo) GetEventDetailsHandler(w http.ResponseWriter, r *http.Request) {
@@ -233,6 +234,7 @@ func (hr *HandlerRepo) GetEventDetailsHandler(w http.ResponseWriter, r *http.Req
 			guildsLeft = 0
 		}
 		eventDetails.GuildsLeft = &guildsLeft
+		eventDetails.RemainingSlot = &guildsLeft
 	}
 
 	if event.MaxPlayersPerGuild.Valid {
@@ -259,6 +261,7 @@ func (hr *HandlerRepo) CreateEventHandler(w http.ResponseWriter, r *http.Request
 	var req EventCreationRequest
 	err := request.DecodeJSON(w, r, &req)
 	if err != nil {
+		hr.logger.Debug("failed to decode json request", "err", err)
 		hr.badRequest(w, r, err)
 		return
 	}
@@ -266,6 +269,32 @@ func (hr *HandlerRepo) CreateEventHandler(w http.ResponseWriter, r *http.Request
 	// --- Basic Validation ---
 	if req.Title == "" {
 		hr.badRequest(w, r, errors.New("event title cannot be empty"))
+		return
+	}
+
+	// Validate event type
+	validEventTypes := map[string]bool{
+		string(store.EventTypeCodeBattle): true,
+		string(store.EventTypeWorkshop):   true,
+		string(store.EventTypeSeminar):    true,
+		string(store.EventTypeSocial):     true,
+	}
+	if req.EventType == "" {
+		hr.badRequest(w, r, errors.New("event type cannot be empty"))
+		return
+	}
+	if !validEventTypes[req.EventType] {
+		hr.badRequest(w, r, fmt.Errorf("invalid event type: %s. Must be one of: code_battle, workshop, seminar, social", req.EventType))
+		return
+	}
+
+	// Validate participation details
+	if req.Participation.MaxGuilds < 3 || req.Participation.MaxGuilds > 100 {
+		hr.badRequest(w, r, errors.New("max_guilds must be between 3 and 100"))
+		return
+	}
+	if req.Participation.MaxPlayersPerGuild < 1 || req.Participation.MaxPlayersPerGuild > 10 {
+		hr.badRequest(w, r, errors.New("max_players_per_guild must be between 1 and 10"))
 		return
 	}
 
@@ -286,6 +315,19 @@ func (hr *HandlerRepo) CreateEventHandler(w http.ResponseWriter, r *http.Request
 				}
 				topicSet[topicID] = true
 			}
+		}
+		// Validate distribution
+		totalProblems := 0
+		for _, dist := range req.EventSpecifics.CodeBattle.Distribution {
+			if dist.Score <= 0 || dist.Score > 1000 {
+				hr.badRequest(w, r, errors.New("score must be greater than 0 and less than or equal to 1000"))
+				return
+			}
+			totalProblems += dist.NumberOfProblems
+		}
+		if totalProblems <= 0 {
+			hr.badRequest(w, r, errors.New("total number of problems must be greater than 0"))
+			return
 		}
 	}
 
@@ -399,7 +441,7 @@ func validDate(req EventCreationRequest) (valid bool, msg string) {
 		return false, "Proposed end date cannot be in the past"
 	}
 
-	return valid, msg
+	return true, ""
 }
 
 // GetMyEventRequestsHandler fetches a list of event requests submitted by a specific guild.

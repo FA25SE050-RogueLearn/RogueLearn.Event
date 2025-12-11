@@ -619,21 +619,23 @@ DELETE FROM submissions WHERE id = $1;
 
 -- Leaderboard Entries
 -- name: CreateLeaderboardEntry :one
-INSERT INTO leaderboard_entries (user_id, username, event_id, rank, score)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO leaderboard_entries (user_id, event_id, rank, score)
+VALUES ($1, $2, $3, $4)
 RETURNING *;
 
 -- name: GetLeaderboardByEvent :many
 WITH user_guilds AS (
   SELECT DISTINCT ON (rp.user_id)
     rp.user_id,
-    rp.guild_id
+    rp.guild_id,
+    rp.username
   FROM room_players rp
   INNER JOIN rooms r ON rp.room_id = r.id
   WHERE r.event_id = $1
 )
 SELECT
   le.*,
+  COALESCE(ug.username, '') as username,
   COALESCE(egp.guild_name, '') as guild_name
 FROM leaderboard_entries le
 LEFT JOIN user_guilds ug ON ug.user_id = le.user_id
@@ -642,14 +644,38 @@ WHERE le.event_id = $1
 ORDER BY le.rank ASC;
 
 -- name: GetLeaderboardByUser :many
-SELECT le.*, e.title as event_title
+WITH user_rooms AS (
+  SELECT DISTINCT ON (r.event_id)
+    r.event_id,
+    rp.username
+  FROM room_players rp
+  INNER JOIN rooms r ON rp.room_id = r.id
+  WHERE rp.user_id = $1
+)
+SELECT
+  le.*,
+  COALESCE(ur.username, '') as username,
+  e.title as event_title
 FROM leaderboard_entries le
 JOIN events e ON le.event_id = e.id
+LEFT JOIN user_rooms ur ON ur.event_id = le.event_id
 WHERE le.user_id = $1
 ORDER BY le.snapshot_date DESC;
 
 -- name: GetLatestLeaderboardByEvent :many
-SELECT * FROM leaderboard_entries le1
+WITH user_guilds AS (
+  SELECT DISTINCT ON (rp.user_id)
+    rp.user_id,
+    rp.username
+  FROM room_players rp
+  INNER JOIN rooms r ON rp.room_id = r.id
+  WHERE r.event_id = $1
+)
+SELECT
+  le1.*,
+  COALESCE(ug.username, '') as username
+FROM leaderboard_entries le1
+LEFT JOIN user_guilds ug ON ug.user_id = le1.user_id
 WHERE le1.event_id = $1
 AND le1.snapshot_date = (
     SELECT MAX(le2.snapshot_date)
@@ -916,10 +942,9 @@ WHERE rp.room_id = lp.room_id AND rp.user_id = lp.user_id;
 -- This creates a permanent historical record of final rankings and scores
 -- Called when event completes to preserve winner information
 -- Includes ALL states (present, completed, disconnected, and left)
-INSERT INTO leaderboard_entries (user_id, username, event_id, rank, score, snapshot_date)
+INSERT INTO leaderboard_entries (user_id, event_id, rank, score, snapshot_date)
 SELECT
   rp.user_id,
-  rp.username,
   $1::uuid as event_id,
   rp.place as rank,
   rp.score,

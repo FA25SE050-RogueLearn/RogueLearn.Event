@@ -330,7 +330,6 @@ type Language struct {
 type LeaderboardEntry struct {
 	ID           pgtype.UUID
 	UserID       pgtype.UUID
-	Username     string
 	EventID      pgtype.UUID
 	Rank         int32
 	Score        int32

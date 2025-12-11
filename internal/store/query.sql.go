@@ -162,10 +162,9 @@ func (q *Queries) CaptureFinalGuildLeaderboard(ctx context.Context, dollar_1 pgt
 }
 
 const captureFinalRoomLeaderboards = `-- name: CaptureFinalRoomLeaderboards :exec
-INSERT INTO leaderboard_entries (user_id, username, event_id, rank, score, snapshot_date)
+INSERT INTO leaderboard_entries (user_id, event_id, rank, score, snapshot_date)
 SELECT
   rp.user_id,
-  rp.username,
   $1::uuid as event_id,
   rp.place as rank,
   rp.score,
@@ -727,24 +726,22 @@ func (q *Queries) CreateLanguage(ctx context.Context, arg CreateLanguageParams) 
 }
 
 const createLeaderboardEntry = `-- name: CreateLeaderboardEntry :one
-INSERT INTO leaderboard_entries (user_id, username, event_id, rank, score)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, user_id, username, event_id, rank, score, snapshot_date
+INSERT INTO leaderboard_entries (user_id, event_id, rank, score)
+VALUES ($1, $2, $3, $4)
+RETURNING id, user_id, event_id, rank, score, snapshot_date
 `
 
 type CreateLeaderboardEntryParams struct {
-	UserID   pgtype.UUID
-	Username string
-	EventID  pgtype.UUID
-	Rank     int32
-	Score    int32
+	UserID  pgtype.UUID
+	EventID pgtype.UUID
+	Rank    int32
+	Score   int32
 }
 
 // Leaderboard Entries
 func (q *Queries) CreateLeaderboardEntry(ctx context.Context, arg CreateLeaderboardEntryParams) (LeaderboardEntry, error) {
 	row := q.db.QueryRow(ctx, createLeaderboardEntry,
 		arg.UserID,
-		arg.Username,
 		arg.EventID,
 		arg.Rank,
 		arg.Score,
@@ -753,7 +750,6 @@ func (q *Queries) CreateLeaderboardEntry(ctx context.Context, arg CreateLeaderbo
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
-		&i.Username,
 		&i.EventID,
 		&i.Rank,
 		&i.Score,
@@ -2540,7 +2536,19 @@ func (q *Queries) GetLatestGuildLeaderboardByEvent(ctx context.Context, eventID 
 }
 
 const getLatestLeaderboardByEvent = `-- name: GetLatestLeaderboardByEvent :many
-SELECT id, user_id, username, event_id, rank, score, snapshot_date FROM leaderboard_entries le1
+WITH user_guilds AS (
+  SELECT DISTINCT ON (rp.user_id)
+    rp.user_id,
+    rp.username
+  FROM room_players rp
+  INNER JOIN rooms r ON rp.room_id = r.id
+  WHERE r.event_id = $1
+)
+SELECT
+  le1.id, le1.user_id, le1.event_id, le1.rank, le1.score, le1.snapshot_date,
+  COALESCE(ug.username, '') as username
+FROM leaderboard_entries le1
+LEFT JOIN user_guilds ug ON ug.user_id = le1.user_id
 WHERE le1.event_id = $1
 AND le1.snapshot_date = (
     SELECT MAX(le2.snapshot_date)
@@ -2550,23 +2558,33 @@ AND le1.snapshot_date = (
 ORDER BY le1.rank ASC
 `
 
-func (q *Queries) GetLatestLeaderboardByEvent(ctx context.Context, eventID pgtype.UUID) ([]LeaderboardEntry, error) {
+type GetLatestLeaderboardByEventRow struct {
+	ID           pgtype.UUID
+	UserID       pgtype.UUID
+	EventID      pgtype.UUID
+	Rank         int32
+	Score        int32
+	SnapshotDate pgtype.Timestamptz
+	Username     string
+}
+
+func (q *Queries) GetLatestLeaderboardByEvent(ctx context.Context, eventID pgtype.UUID) ([]GetLatestLeaderboardByEventRow, error) {
 	rows, err := q.db.Query(ctx, getLatestLeaderboardByEvent, eventID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []LeaderboardEntry
+	var items []GetLatestLeaderboardByEventRow
 	for rows.Next() {
-		var i LeaderboardEntry
+		var i GetLatestLeaderboardByEventRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.UserID,
-			&i.Username,
 			&i.EventID,
 			&i.Rank,
 			&i.Score,
 			&i.SnapshotDate,
+			&i.Username,
 		); err != nil {
 			return nil, err
 		}
@@ -2582,13 +2600,15 @@ const getLeaderboardByEvent = `-- name: GetLeaderboardByEvent :many
 WITH user_guilds AS (
   SELECT DISTINCT ON (rp.user_id)
     rp.user_id,
-    rp.guild_id
+    rp.guild_id,
+    rp.username
   FROM room_players rp
   INNER JOIN rooms r ON rp.room_id = r.id
   WHERE r.event_id = $1
 )
 SELECT
-  le.id, le.user_id, le.username, le.event_id, le.rank, le.score, le.snapshot_date,
+  le.id, le.user_id, le.event_id, le.rank, le.score, le.snapshot_date,
+  COALESCE(ug.username, '') as username,
   COALESCE(egp.guild_name, '') as guild_name
 FROM leaderboard_entries le
 LEFT JOIN user_guilds ug ON ug.user_id = le.user_id
@@ -2600,11 +2620,11 @@ ORDER BY le.rank ASC
 type GetLeaderboardByEventRow struct {
 	ID           pgtype.UUID
 	UserID       pgtype.UUID
-	Username     string
 	EventID      pgtype.UUID
 	Rank         int32
 	Score        int32
 	SnapshotDate pgtype.Timestamptz
+	Username     string
 	GuildName    string
 }
 
@@ -2620,11 +2640,11 @@ func (q *Queries) GetLeaderboardByEvent(ctx context.Context, eventID pgtype.UUID
 		if err := rows.Scan(
 			&i.ID,
 			&i.UserID,
-			&i.Username,
 			&i.EventID,
 			&i.Rank,
 			&i.Score,
 			&i.SnapshotDate,
+			&i.Username,
 			&i.GuildName,
 		); err != nil {
 			return nil, err
@@ -2638,9 +2658,21 @@ func (q *Queries) GetLeaderboardByEvent(ctx context.Context, eventID pgtype.UUID
 }
 
 const getLeaderboardByUser = `-- name: GetLeaderboardByUser :many
-SELECT le.id, le.user_id, le.username, le.event_id, le.rank, le.score, le.snapshot_date, e.title as event_title
+WITH user_rooms AS (
+  SELECT DISTINCT ON (r.event_id)
+    r.event_id,
+    rp.username
+  FROM room_players rp
+  INNER JOIN rooms r ON rp.room_id = r.id
+  WHERE rp.user_id = $1
+)
+SELECT
+  le.id, le.user_id, le.event_id, le.rank, le.score, le.snapshot_date,
+  COALESCE(ur.username, '') as username,
+  e.title as event_title
 FROM leaderboard_entries le
 JOIN events e ON le.event_id = e.id
+LEFT JOIN user_rooms ur ON ur.event_id = le.event_id
 WHERE le.user_id = $1
 ORDER BY le.snapshot_date DESC
 `
@@ -2648,11 +2680,11 @@ ORDER BY le.snapshot_date DESC
 type GetLeaderboardByUserRow struct {
 	ID           pgtype.UUID
 	UserID       pgtype.UUID
-	Username     string
 	EventID      pgtype.UUID
 	Rank         int32
 	Score        int32
 	SnapshotDate pgtype.Timestamptz
+	Username     string
 	EventTitle   string
 }
 
@@ -2668,11 +2700,11 @@ func (q *Queries) GetLeaderboardByUser(ctx context.Context, userID pgtype.UUID) 
 		if err := rows.Scan(
 			&i.ID,
 			&i.UserID,
-			&i.Username,
 			&i.EventID,
 			&i.Rank,
 			&i.Score,
 			&i.SnapshotDate,
+			&i.Username,
 			&i.EventTitle,
 		); err != nil {
 			return nil, err
@@ -4294,7 +4326,7 @@ const updateLeaderboardEntry = `-- name: UpdateLeaderboardEntry :one
 UPDATE leaderboard_entries
 SET rank = $2, score = $3
 WHERE id = $1
-RETURNING id, user_id, username, event_id, rank, score, snapshot_date
+RETURNING id, user_id, event_id, rank, score, snapshot_date
 `
 
 type UpdateLeaderboardEntryParams struct {
@@ -4309,7 +4341,6 @@ func (q *Queries) UpdateLeaderboardEntry(ctx context.Context, arg UpdateLeaderbo
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
-		&i.Username,
 		&i.EventID,
 		&i.Rank,
 		&i.Score,

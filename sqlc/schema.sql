@@ -130,7 +130,6 @@ CREATE TABLE public.languages (
 CREATE TABLE public.leaderboard_entries (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
-  username text NOT NULL DEFAULT ''::text,
   event_id uuid NOT NULL,
   rank integer NOT NULL,
   score integer NOT NULL,
