@@ -638,8 +638,9 @@ func (hr *HandlerRepo) RegisterGuildToEventHandler(w http.ResponseWriter, r *htt
 
 	// room_id will be known later (assigned at assignment_date)
 	_, err = qtx.CreateEventGuildParticipant(r.Context(), store.CreateEventGuildParticipantParams{
-		EventID: toPgtypeUUID(eventID),
-		GuildID: toPgtypeUUID(guildID),
+		EventID:   toPgtypeUUID(eventID),
+		GuildID:   toPgtypeUUID(guildID),
+		GuildName: pgtype.Text{String: guild.Name, Valid: true},
 	})
 	if err != nil {
 		// Check for duplicate registration and provide friendly error
