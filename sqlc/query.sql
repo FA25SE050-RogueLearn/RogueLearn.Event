@@ -877,11 +877,9 @@ WHERE requester_guild_id = $1;
 UPDATE event_requests
 SET
   status = $2,
-  processed_by_admin_id = $3,
-  processed_at = NOW() AT TIME ZONE 'utc'
-,
-  rejection_reason = $4,
-  approved_event_id = $5
+  processed_at = NOW() AT TIME ZONE 'utc',
+  rejection_reason = $3,
+  approved_event_id = $4
 WHERE id = $1
 RETURNING *;
 

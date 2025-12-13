@@ -194,7 +194,6 @@ CREATE TABLE public.event_requests (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   status event_request_status NOT NULL DEFAULT 'pending'::event_request_status,
   requester_guild_id uuid NOT NULL,
-  processed_by_admin_id uuid,
   created_at timestamp with time zone NOT NULL DEFAULT (now() AT TIME ZONE 'utc'::text),
   processed_at timestamp with time zone,
   event_type event_type NOT NULL,

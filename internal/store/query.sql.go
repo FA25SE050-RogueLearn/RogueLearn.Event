@@ -607,7 +607,7 @@ INSERT INTO event_requests (
   $1, $2, $3, $4, $5, $6, $7,
   $8::jsonb,
   $9::jsonb
-) RETURNING id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id
+) RETURNING id, status, requester_guild_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id
 `
 
 type CreateEventRequestParams struct {
@@ -640,7 +640,6 @@ func (q *Queries) CreateEventRequest(ctx context.Context, arg CreateEventRequest
 		&i.ID,
 		&i.Status,
 		&i.RequesterGuildID,
-		&i.ProcessedByAdminID,
 		&i.CreatedAt,
 		&i.ProcessedAt,
 		&i.EventType,
@@ -1841,7 +1840,7 @@ func (q *Queries) GetEventParticipants(ctx context.Context, eventID pgtype.UUID)
 }
 
 const getEventRequestByID = `-- name: GetEventRequestByID :one
-SELECT id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id FROM event_requests WHERE id = $1
+SELECT id, status, requester_guild_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id FROM event_requests WHERE id = $1
 `
 
 func (q *Queries) GetEventRequestByID(ctx context.Context, id pgtype.UUID) (EventRequest, error) {
@@ -1851,7 +1850,6 @@ func (q *Queries) GetEventRequestByID(ctx context.Context, id pgtype.UUID) (Even
 		&i.ID,
 		&i.Status,
 		&i.RequesterGuildID,
-		&i.ProcessedByAdminID,
 		&i.CreatedAt,
 		&i.ProcessedAt,
 		&i.EventType,
@@ -3830,7 +3828,7 @@ func (q *Queries) GetUserSubmissionStats(ctx context.Context, userID pgtype.UUID
 }
 
 const listEventRequests = `-- name: ListEventRequests :many
-SELECT id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id FROM event_requests
+SELECT id, status, requester_guild_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id FROM event_requests
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -3853,7 +3851,6 @@ func (q *Queries) ListEventRequests(ctx context.Context, arg ListEventRequestsPa
 			&i.ID,
 			&i.Status,
 			&i.RequesterGuildID,
-			&i.ProcessedByAdminID,
 			&i.CreatedAt,
 			&i.ProcessedAt,
 			&i.EventType,
@@ -3878,7 +3875,7 @@ func (q *Queries) ListEventRequests(ctx context.Context, arg ListEventRequestsPa
 }
 
 const listEventRequestsByGuild = `-- name: ListEventRequestsByGuild :many
-SELECT id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id FROM event_requests
+SELECT id, status, requester_guild_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id FROM event_requests
 WHERE requester_guild_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3
@@ -3903,7 +3900,6 @@ func (q *Queries) ListEventRequestsByGuild(ctx context.Context, arg ListEventReq
 			&i.ID,
 			&i.Status,
 			&i.RequesterGuildID,
-			&i.ProcessedByAdminID,
 			&i.CreatedAt,
 			&i.ProcessedAt,
 			&i.EventType,
@@ -3928,7 +3924,7 @@ func (q *Queries) ListEventRequestsByGuild(ctx context.Context, arg ListEventReq
 }
 
 const listEventRequestsByStatus = `-- name: ListEventRequestsByStatus :many
-SELECT id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id FROM event_requests
+SELECT id, status, requester_guild_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id FROM event_requests
 WHERE status = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3
@@ -3953,7 +3949,6 @@ func (q *Queries) ListEventRequestsByStatus(ctx context.Context, arg ListEventRe
 			&i.ID,
 			&i.Status,
 			&i.RequesterGuildID,
-			&i.ProcessedByAdminID,
 			&i.CreatedAt,
 			&i.ProcessedAt,
 			&i.EventType,
@@ -4165,28 +4160,24 @@ const updateEventRequestStatus = `-- name: UpdateEventRequestStatus :one
 UPDATE event_requests
 SET
   status = $2,
-  processed_by_admin_id = $3,
-  processed_at = NOW() AT TIME ZONE 'utc'
-,
-  rejection_reason = $4,
-  approved_event_id = $5
+  processed_at = NOW() AT TIME ZONE 'utc',
+  rejection_reason = $3,
+  approved_event_id = $4
 WHERE id = $1
-RETURNING id, status, requester_guild_id, processed_by_admin_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id
+RETURNING id, status, requester_guild_id, created_at, processed_at, event_type, title, description, proposed_start_date, proposed_end_date, notes, participation_details, event_specifics, rejection_reason, approved_event_id
 `
 
 type UpdateEventRequestStatusParams struct {
-	ID                 pgtype.UUID
-	Status             EventRequestStatus
-	ProcessedByAdminID pgtype.UUID
-	RejectionReason    pgtype.Text
-	ApprovedEventID    pgtype.UUID
+	ID              pgtype.UUID
+	Status          EventRequestStatus
+	RejectionReason pgtype.Text
+	ApprovedEventID pgtype.UUID
 }
 
 func (q *Queries) UpdateEventRequestStatus(ctx context.Context, arg UpdateEventRequestStatusParams) (EventRequest, error) {
 	row := q.db.QueryRow(ctx, updateEventRequestStatus,
 		arg.ID,
 		arg.Status,
-		arg.ProcessedByAdminID,
 		arg.RejectionReason,
 		arg.ApprovedEventID,
 	)
@@ -4195,7 +4186,6 @@ func (q *Queries) UpdateEventRequestStatus(ctx context.Context, arg UpdateEventR
 		&i.ID,
 		&i.Status,
 		&i.RequesterGuildID,
-		&i.ProcessedByAdminID,
 		&i.CreatedAt,
 		&i.ProcessedAt,
 		&i.EventType,

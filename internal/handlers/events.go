@@ -891,11 +891,10 @@ func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventR
 
 	// Update the request status
 	_, err = qtx.UpdateEventRequestStatus(ctx, store.UpdateEventRequestStatusParams{
-		ID:                 req.ID,
-		Status:             store.EventRequestStatusApproved,
-		ProcessedByAdminID: toPgtypeUUID(adminID),
-		ApprovedEventID:    event.ID,
-		RejectionReason:    pgtype.Text{Valid: false},
+		ID:              req.ID,
+		Status:          store.EventRequestStatusApproved,
+		ApprovedEventID: event.ID,
+		RejectionReason: pgtype.Text{Valid: false},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to update event request status: %w", err)
@@ -921,11 +920,10 @@ func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventR
 
 func (hr *HandlerRepo) declineEventRequest(ctx context.Context, req store.EventRequest, adminID uuid.UUID, reason string) error {
 	_, err := hr.queries.UpdateEventRequestStatus(ctx, store.UpdateEventRequestStatusParams{
-		ID:                 req.ID,
-		Status:             store.EventRequestStatusRejected,
-		ProcessedByAdminID: toPgtypeUUID(adminID),
-		RejectionReason:    pgtype.Text{String: reason, Valid: true},
-		ApprovedEventID:    pgtype.UUID{Valid: false},
+		ID:              req.ID,
+		Status:          store.EventRequestStatusRejected,
+		RejectionReason: pgtype.Text{String: reason, Valid: true},
+		ApprovedEventID: pgtype.UUID{Valid: false},
 	})
 	return err
 }

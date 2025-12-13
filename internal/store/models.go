@@ -294,7 +294,6 @@ type EventRequest struct {
 	ID                   pgtype.UUID
 	Status               EventRequestStatus
 	RequesterGuildID     pgtype.UUID
-	ProcessedByAdminID   pgtype.UUID
 	CreatedAt            pgtype.Timestamptz
 	ProcessedAt          pgtype.Timestamptz
 	EventType            EventType
