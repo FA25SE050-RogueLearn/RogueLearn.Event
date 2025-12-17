@@ -71,30 +71,6 @@ func (q *Queries) AssignGuildToRoom(ctx context.Context, arg AssignGuildToRoomPa
 	return err
 }
 
-const calculateGuildLeaderboard = `-- name: CalculateGuildLeaderboard :exec
-WITH latest_snapshot_time AS (
-  SELECT MAX(gle1.snapshot_date) as snapshot_time
-  FROM guild_leaderboard_entries gle1
-  WHERE gle1.event_id = $1
-),
-ranked_entries AS (
-  SELECT
-    id,
-    DENSE_RANK() OVER (ORDER BY total_score DESC) as new_rank
-  FROM guild_leaderboard_entries gle2
-  WHERE gle2.event_id = $1 AND gle2.snapshot_date = (SELECT gle3.snapshot_time FROM latest_snapshot_time gle3)
-)
-UPDATE guild_leaderboard_entries gle
-SET rank = re.new_rank
-FROM ranked_entries re
-WHERE gle.id = re.id
-`
-
-func (q *Queries) CalculateGuildLeaderboard(ctx context.Context, eventID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, calculateGuildLeaderboard, eventID)
-	return err
-}
-
 const calculateRoomLeaderboard = `-- name: CalculateRoomLeaderboard :exec
 WITH locked_players AS (
   -- First, lock the rows without window functions
@@ -107,7 +83,7 @@ ranked_players AS (
   -- Then, calculate rankings using window function (no FOR UPDATE here)
   SELECT
     user_id,
-    DENSE_RANK() OVER (ORDER BY score DESC, joined_at ASC) as new_place
+    ROW_NUMBER() OVER (ORDER BY score DESC, joined_at ASC) as new_place
   FROM locked_players
 )
 UPDATE room_players rp
@@ -139,7 +115,7 @@ ranked_guilds AS (
   SELECT
     guild_id,
     total_score,
-    DENSE_RANK() OVER (ORDER BY total_score DESC) as rank
+    ROW_NUMBER() OVER (ORDER BY total_score DESC) as rank
   FROM guild_scores
 )
 INSERT INTO guild_leaderboard_entries (guild_id, event_id, rank, total_score, snapshot_date)
@@ -156,6 +132,7 @@ FROM ranked_guilds rg
 // Calculates total scores by summing all players from each guild
 // Creates permanent record of which guild won
 // Includes ALL states (present, completed, disconnected, and left)
+// Uses ROW_NUMBER() to ensure unique ranks (no ties)
 func (q *Queries) CaptureFinalGuildLeaderboard(ctx context.Context, dollar_1 pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, captureFinalGuildLeaderboard, dollar_1)
 	return err
@@ -166,19 +143,19 @@ INSERT INTO leaderboard_entries (user_id, event_id, rank, score, snapshot_date)
 SELECT
   rp.user_id,
   $1::uuid as event_id,
-  rp.place as rank,
+  ROW_NUMBER() OVER (ORDER BY rp.score DESC, rp.joined_at ASC) as rank,
   rp.score,
   NOW() AT TIME ZONE 'utc' as snapshot_date
 FROM room_players rp
 INNER JOIN rooms r ON rp.room_id = r.id
 WHERE r.event_id = $1
-ORDER BY rp.score DESC, rp.joined_at ASC
 `
 
 // Capture final leaderboard snapshot for all rooms in an event
 // This creates a permanent historical record of final rankings and scores
 // Called when event completes to preserve winner information
 // Includes ALL states (present, completed, disconnected, and left)
+// Uses ROW_NUMBER() to ensure unique ranks (no ties)
 func (q *Queries) CaptureFinalRoomLeaderboards(ctx context.Context, dollar_1 pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, captureFinalRoomLeaderboards, dollar_1)
 	return err
@@ -3702,7 +3679,7 @@ SELECT
   gs.guild_id,
   COALESCE(egp.guild_name, '') as guild_name,
   gs.total_score,
-  DENSE_RANK() OVER (ORDER BY gs.total_score DESC) as rank
+  ROW_NUMBER() OVER (ORDER BY gs.total_score DESC) as rank
 FROM guild_scores gs
 LEFT JOIN event_guild_participants egp ON egp.event_id = $1 AND egp.guild_id = gs.guild_id
 ORDER BY gs.total_score DESC
@@ -3733,57 +3710,6 @@ func (q *Queries) GetTop3GuildsByEvent(ctx context.Context, eventID pgtype.UUID)
 			&i.GuildName,
 			&i.TotalScore,
 			&i.Rank,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const getTop3PlayersByEvent = `-- name: GetTop3PlayersByEvent :many
-SELECT
-  rp.user_id,
-  rp.username,
-  rp.score,
-  rp.place as rank,
-  rp.room_id
-FROM room_players rp
-INNER JOIN rooms r ON rp.room_id = r.id
-WHERE r.event_id = $1
-ORDER BY rp.score DESC, rp.joined_at ASC
-LIMIT 3
-`
-
-type GetTop3PlayersByEventRow struct {
-	UserID   pgtype.UUID
-	Username string
-	Score    int32
-	Rank     pgtype.Int4
-	RoomID   pgtype.UUID
-}
-
-// Get top 3 players across all rooms in an event
-// P2-1: Used to populate EventExpired message with winners
-// Includes ALL states (present, completed, disconnected, and left)
-func (q *Queries) GetTop3PlayersByEvent(ctx context.Context, eventID pgtype.UUID) ([]GetTop3PlayersByEventRow, error) {
-	rows, err := q.db.Query(ctx, getTop3PlayersByEvent, eventID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []GetTop3PlayersByEventRow
-	for rows.Next() {
-		var i GetTop3PlayersByEventRow
-		if err := rows.Scan(
-			&i.UserID,
-			&i.Username,
-			&i.Score,
-			&i.Rank,
-			&i.RoomID,
 		); err != nil {
 			return nil, err
 		}

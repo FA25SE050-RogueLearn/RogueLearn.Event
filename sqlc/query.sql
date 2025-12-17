@@ -699,7 +699,7 @@ ranked_players AS (
   -- Then, calculate rankings using window function (no FOR UPDATE here)
   SELECT
     user_id,
-    DENSE_RANK() OVER (ORDER BY score DESC, joined_at ASC) as new_place
+    ROW_NUMBER() OVER (ORDER BY score DESC, joined_at ASC) as new_place
   FROM locked_players
 )
 UPDATE room_players rp
@@ -767,24 +767,6 @@ RETURNING *;
 -- name: DeleteGuildLeaderboardEntry :exec
 DELETE FROM guild_leaderboard_entries
 WHERE id = $1;
-
--- name: CalculateGuildLeaderboard :exec
-WITH latest_snapshot_time AS (
-  SELECT MAX(gle1.snapshot_date) as snapshot_time
-  FROM guild_leaderboard_entries gle1
-  WHERE gle1.event_id = $1
-),
-ranked_entries AS (
-  SELECT
-    id,
-    DENSE_RANK() OVER (ORDER BY total_score DESC) as new_rank
-  FROM guild_leaderboard_entries gle2
-  WHERE gle2.event_id = $1 AND gle2.snapshot_date = (SELECT gle3.snapshot_time FROM latest_snapshot_time gle3)
-)
-UPDATE guild_leaderboard_entries gle
-SET rank = re.new_rank
-FROM ranked_entries re
-WHERE gle.id = re.id;
 
 -- Complex Queries
 -- name: GetEventWithProblemsAndLanguages :many
@@ -940,23 +922,24 @@ WHERE rp.room_id = lp.room_id AND rp.user_id = lp.user_id;
 -- This creates a permanent historical record of final rankings and scores
 -- Called when event completes to preserve winner information
 -- Includes ALL states (present, completed, disconnected, and left)
+-- Uses ROW_NUMBER() to ensure unique ranks (no ties)
 INSERT INTO leaderboard_entries (user_id, event_id, rank, score, snapshot_date)
 SELECT
   rp.user_id,
   $1::uuid as event_id,
-  rp.place as rank,
+  ROW_NUMBER() OVER (ORDER BY rp.score DESC, rp.joined_at ASC) as rank,
   rp.score,
   NOW() AT TIME ZONE 'utc' as snapshot_date
 FROM room_players rp
 INNER JOIN rooms r ON rp.room_id = r.id
-WHERE r.event_id = $1
-ORDER BY rp.score DESC, rp.joined_at ASC;
+WHERE r.event_id = $1;
 
 -- name: CaptureFinalGuildLeaderboard :exec
 -- Capture final guild leaderboard snapshot for an event
 -- Calculates total scores by summing all players from each guild
 -- Creates permanent record of which guild won
 -- Includes ALL states (present, completed, disconnected, and left)
+-- Uses ROW_NUMBER() to ensure unique ranks (no ties)
 WITH guild_scores AS (
   SELECT
     rp.guild_id,
@@ -971,7 +954,7 @@ ranked_guilds AS (
   SELECT
     guild_id,
     total_score,
-    DENSE_RANK() OVER (ORDER BY total_score DESC) as rank
+    ROW_NUMBER() OVER (ORDER BY total_score DESC) as rank
   FROM guild_scores
 )
 INSERT INTO guild_leaderboard_entries (guild_id, event_id, rank, total_score, snapshot_date)
@@ -982,22 +965,6 @@ SELECT
   rg.total_score::integer,
   NOW() AT TIME ZONE 'utc' as snapshot_date
 FROM ranked_guilds rg;
-
--- name: GetTop3PlayersByEvent :many
--- Get top 3 players across all rooms in an event
--- P2-1: Used to populate EventExpired message with winners
--- Includes ALL states (present, completed, disconnected, and left)
-SELECT
-  rp.user_id,
-  rp.username,
-  rp.score,
-  rp.place as rank,
-  rp.room_id
-FROM room_players rp
-INNER JOIN rooms r ON rp.room_id = r.id
-WHERE r.event_id = $1
-ORDER BY rp.score DESC, rp.joined_at ASC
-LIMIT 3;
 
 -- name: GetAllPlayersByEvent :many
 -- Get all players across all rooms in an event for granting achievements and contribution points
@@ -1047,7 +1014,7 @@ SELECT
   gs.guild_id,
   COALESCE(egp.guild_name, '') as guild_name,
   gs.total_score,
-  DENSE_RANK() OVER (ORDER BY gs.total_score DESC) as rank
+  ROW_NUMBER() OVER (ORDER BY gs.total_score DESC) as rank
 FROM guild_scores gs
 LEFT JOIN event_guild_participants egp ON egp.event_id = $1 AND egp.guild_id = gs.guild_id
 ORDER BY gs.total_score DESC
