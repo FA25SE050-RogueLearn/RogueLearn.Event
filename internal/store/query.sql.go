@@ -79,12 +79,21 @@ WITH locked_players AS (
   WHERE room_id = $1
   FOR UPDATE  -- Lock these rows to prevent concurrent modifications
 ),
+player_last_accepted AS (
+  SELECT
+    s.user_id,
+    MAX(s.submitted_at) as last_accepted_at
+  FROM submissions s
+  WHERE s.room_id = $1 AND s.status = 'accepted'
+  GROUP BY s.user_id
+),
 ranked_players AS (
   -- Then, calculate rankings using window function (no FOR UPDATE here)
   SELECT
-    user_id,
-    ROW_NUMBER() OVER (ORDER BY score DESC, joined_at ASC) as new_place
-  FROM locked_players
+    lp.user_id,
+    ROW_NUMBER() OVER (ORDER BY lp.score DESC, COALESCE(pla.last_accepted_at, '9999-12-31'::timestamptz) ASC, lp.joined_at ASC) as new_place
+  FROM locked_players lp
+  LEFT JOIN player_last_accepted pla ON pla.user_id = lp.user_id
 )
 UPDATE room_players rp
 SET place = rp_ranked.new_place
@@ -95,13 +104,24 @@ WHERE rp.room_id = $1 AND rp.user_id = rp_ranked.user_id
 // This query uses SELECT FOR UPDATE to lock rows and prevent race conditions
 // across multiple instances when calculating leaderboard rankings.
 // The lock is held until the transaction commits, ensuring atomicity.
+// Tiebreaker: earliest last accepted submission wins, then earliest join time
 func (q *Queries) CalculateRoomLeaderboard(ctx context.Context, roomID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, calculateRoomLeaderboard, roomID)
 	return err
 }
 
 const captureFinalGuildLeaderboard = `-- name: CaptureFinalGuildLeaderboard :exec
-WITH guild_scores AS (
+WITH guild_last_accepted AS (
+  SELECT
+    rp.guild_id,
+    MAX(s.submitted_at) as last_accepted_at
+  FROM submissions s
+  INNER JOIN room_players rp ON s.user_id = rp.user_id AND s.room_id = rp.room_id
+  INNER JOIN rooms r ON rp.room_id = r.id
+  WHERE r.event_id = $1 AND s.status = 'accepted'
+  GROUP BY rp.guild_id
+),
+guild_scores AS (
   SELECT
     rp.guild_id,
     SUM(rp.score) as total_score,
@@ -113,10 +133,13 @@ WITH guild_scores AS (
 ),
 ranked_guilds AS (
   SELECT
-    guild_id,
-    total_score,
-    ROW_NUMBER() OVER (ORDER BY total_score DESC) as rank
-  FROM guild_scores
+    gs.guild_id,
+    gs.total_score,
+    egp.joined_at as guild_joined_at,
+    ROW_NUMBER() OVER (ORDER BY gs.total_score DESC, COALESCE(gla.last_accepted_at, '9999-12-31'::timestamptz) ASC, egp.joined_at ASC) as rank
+  FROM guild_scores gs
+  LEFT JOIN guild_last_accepted gla ON gla.guild_id = gs.guild_id
+  LEFT JOIN event_guild_participants egp ON egp.event_id = $1 AND egp.guild_id = gs.guild_id
 )
 INSERT INTO guild_leaderboard_entries (guild_id, event_id, rank, total_score, snapshot_date)
 SELECT
@@ -133,21 +156,32 @@ FROM ranked_guilds rg
 // Creates permanent record of which guild won
 // Includes ALL states (present, completed, disconnected, and left)
 // Uses ROW_NUMBER() to ensure unique ranks (no ties)
+// Tiebreaker: earliest last accepted submission wins, then earliest guild join time
 func (q *Queries) CaptureFinalGuildLeaderboard(ctx context.Context, dollar_1 pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, captureFinalGuildLeaderboard, dollar_1)
 	return err
 }
 
 const captureFinalRoomLeaderboards = `-- name: CaptureFinalRoomLeaderboards :exec
+WITH player_last_accepted AS (
+  SELECT
+    s.user_id,
+    s.room_id,
+    MAX(s.submitted_at) as last_accepted_at
+  FROM submissions s
+  WHERE s.status = 'accepted'
+  GROUP BY s.user_id, s.room_id
+)
 INSERT INTO leaderboard_entries (user_id, event_id, rank, score, snapshot_date)
 SELECT
   rp.user_id,
   $1::uuid as event_id,
-  ROW_NUMBER() OVER (ORDER BY rp.score DESC, rp.joined_at ASC) as rank,
+  ROW_NUMBER() OVER (ORDER BY rp.score DESC, COALESCE(pla.last_accepted_at, '9999-12-31'::timestamptz) ASC, rp.joined_at ASC) as rank,
   rp.score,
   NOW() AT TIME ZONE 'utc' as snapshot_date
 FROM room_players rp
 INNER JOIN rooms r ON rp.room_id = r.id
+LEFT JOIN player_last_accepted pla ON pla.user_id = rp.user_id AND pla.room_id = rp.room_id
 WHERE r.event_id = $1
 `
 
@@ -156,6 +190,7 @@ WHERE r.event_id = $1
 // Called when event completes to preserve winner information
 // Includes ALL states (present, completed, disconnected, and left)
 // Uses ROW_NUMBER() to ensure unique ranks (no ties)
+// Tiebreaker: earliest last accepted submission wins, then earliest join time
 func (q *Queries) CaptureFinalRoomLeaderboards(ctx context.Context, dollar_1 pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, captureFinalRoomLeaderboards, dollar_1)
 	return err
@@ -2034,7 +2069,7 @@ func (q *Queries) GetEvents(ctx context.Context, arg GetEventsParams) ([]Event, 
 const getEventsByStatus = `-- name: GetEventsByStatus :many
 SELECT id, title, description, type, started_date, end_date, max_guilds, max_players_per_guild, original_request_id, status, assignment_date FROM events
 WHERE status = $1
-ORDER BY started_date ASC
+ORDER BY started_date DESC
 LIMIT $2
 OFFSET $3
 `
