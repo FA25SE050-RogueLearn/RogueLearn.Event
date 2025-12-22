@@ -21,7 +21,7 @@ import (
 
 // EventConfig holds configuration for event-related settings
 type EventConfig struct {
-	AssignmentDelayMinutes int // Delay before event start for guild-to-room assignment
+	AssignmentDelaySeconds int // Delay before event start for guild-to-room assignment
 }
 
 // HandlerRepo holds all the dependencies required by the handlers.
@@ -69,9 +69,9 @@ func NewHandlerRepo(ctx context.Context, logger *slog.Logger, db *pgxpool.Pool, 
 	go eventHub.StartInactiveRoomCleanup(ctx, 5*time.Minute, 30*time.Minute)
 
 	// Load event configuration from environment variables
-	assignmentDelayMinutes := env.GetInt("EVENT_ASSIGNMENT_DELAY_MINUTES", 5)
+	assignmentDelaySeconds := env.GetInt("EVENT_ASSIGNMENT_DELAY_SECONDS", 30)
 	logger.Info("Event configuration loaded",
-		"assignment_delay_minutes", assignmentDelayMinutes)
+		"assignment_delay_seconds", assignmentDelaySeconds)
 
 	return &HandlerRepo{
 		logger:         logger,
@@ -83,7 +83,7 @@ func NewHandlerRepo(ctx context.Context, logger *slog.Logger, db *pgxpool.Pool, 
 		executorClient: executorClient,
 		userClient:     userClient,
 		eventConfig: EventConfig{
-			AssignmentDelayMinutes: assignmentDelayMinutes,
+			AssignmentDelaySeconds: assignmentDelaySeconds,
 		},
 	}
 }

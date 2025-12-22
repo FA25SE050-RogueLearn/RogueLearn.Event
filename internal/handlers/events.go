@@ -841,7 +841,7 @@ func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventR
 	defer tx.Rollback(ctx)
 	qtx := hr.queries.WithTx(tx)
 
-	assignmentDate := req.ProposedStartDate.Time.Add(-time.Duration(hr.eventConfig.AssignmentDelayMinutes) * time.Minute)
+	assignmentDate := req.ProposedStartDate.Time.Add(-time.Duration(hr.eventConfig.AssignmentDelaySeconds) * time.Second)
 
 	// Create the actual event (rooms will be created dynamically at assignment time)
 	event, err := qtx.CreateEvent(ctx, store.CreateEventParams{
@@ -912,7 +912,6 @@ func (hr *HandlerRepo) approveEventRequest(ctx context.Context, req store.EventR
 
 	// Note: Room creation and guild-to-room assignment will be triggered automatically by the
 	// Alpine cron service when it calls /internal/start-pending-events
-	// at the assignment_date (15 minutes before event start).
 	// Rooms will be created dynamically based on the number of guilds that joined.
 
 	return nil

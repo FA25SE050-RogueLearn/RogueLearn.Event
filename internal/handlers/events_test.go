@@ -122,7 +122,7 @@ func newTestHandler(t *testing.T) (*HandlerRepo, *MockQueries, *MockUserClient) 
 		logger:    logger,
 		jwtParser: jwt.NewJWTParser("test-secret", "", "", logger),
 		eventConfig: EventConfig{
-			AssignmentDelayMinutes: 15,
+			AssignmentDelaySeconds: 30,
 		},
 	}
 
