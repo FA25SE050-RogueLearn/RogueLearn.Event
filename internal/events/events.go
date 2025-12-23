@@ -90,9 +90,6 @@ type EventExpired struct {
 	// P2-1: Top performers
 	TopPlayers []TopPlayer `json:"top_players,omitempty"`
 	TopGuilds  []TopGuild  `json:"top_guilds,omitempty"`
-
-	// P2-1: Event statistics
-	Statistics EventStatistics `json:"statistics"`
 }
 
 // TopPlayer represents a top-ranked player in the event

@@ -1891,68 +1891,6 @@ func (q *Queries) GetEventRequesterIDByEventID(ctx context.Context, id pgtype.UU
 	return requester_guild_id, err
 }
 
-const getEventStatistics = `-- name: GetEventStatistics :one
-WITH event_rooms AS (
-  SELECT id FROM rooms WHERE event_id = $1
-),
-player_stats AS (
-  SELECT
-    COUNT(DISTINCT rp.user_id) as total_participants,
-    COALESCE(AVG(rp.score), 0) as average_score,
-    COALESCE(MAX(rp.score), 0) as highest_score
-  FROM room_players rp
-  WHERE rp.room_id IN (SELECT id FROM event_rooms)
-),
-submission_stats AS (
-  SELECT
-    COUNT(*) as total_submissions,
-    COUNT(CASE WHEN s.status = 'accepted' THEN 1 END) as accepted_submissions
-  FROM submissions s
-  WHERE s.room_id IN (SELECT id FROM event_rooms)
-)
-SELECT
-  ps.total_participants::integer,
-  ss.total_submissions::integer,
-  ss.accepted_submissions::integer,
-  CASE
-    WHEN ss.total_submissions > 0 THEN
-      ROUND((ss.accepted_submissions::numeric / ss.total_submissions::numeric) * 100, 2)
-    ELSE 0
-  END as acceptance_rate,
-  ROUND(ps.average_score::numeric, 2) as average_score,
-  ps.highest_score::integer,
-  (SELECT COUNT(*) FROM event_rooms)::integer as total_rooms
-FROM player_stats ps, submission_stats ss
-`
-
-type GetEventStatisticsRow struct {
-	PsTotalParticipants   int32
-	SsTotalSubmissions    int32
-	SsAcceptedSubmissions int32
-	AcceptanceRate        int32
-	AverageScore          pgtype.Numeric
-	PsHighestScore        int32
-	TotalRooms            int32
-}
-
-// Get aggregate statistics for an event
-// P2-1: Used to populate EventExpired message with event stats
-// Includes ALL states (present, completed, disconnected, and left)
-func (q *Queries) GetEventStatistics(ctx context.Context, eventID pgtype.UUID) (GetEventStatisticsRow, error) {
-	row := q.db.QueryRow(ctx, getEventStatistics, eventID)
-	var i GetEventStatisticsRow
-	err := row.Scan(
-		&i.PsTotalParticipants,
-		&i.SsTotalSubmissions,
-		&i.SsAcceptedSubmissions,
-		&i.AcceptanceRate,
-		&i.AverageScore,
-		&i.PsHighestScore,
-		&i.TotalRooms,
-	)
-	return i, err
-}
-
 const getEventWithProblemsAndLanguages = `-- name: GetEventWithProblemsAndLanguages :many
 SELECT
     e.id, e.title, e.description, e.type, e.started_date, e.end_date, e.max_guilds, e.max_players_per_guild, e.original_request_id, e.status, e.assignment_date,
@@ -2725,6 +2663,33 @@ func (q *Queries) GetLeaderboardByUser(ctx context.Context, userID pgtype.UUID) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const getMyAssignedRoom = `-- name: GetMyAssignedRoom :one
+SELECT r.id, r.event_id, r.name, r.description, r.created_date FROM rooms r
+INNER JOIN event_guild_participants egp ON r.id = egp.room_id
+INNER JOIN event_guild_members egm ON egp.event_id = egm.event_id AND egp.guild_id = egm.guild_id
+WHERE egp.event_id = $1 AND egm.user_id = $2
+`
+
+type GetMyAssignedRoomParams struct {
+	EventID pgtype.UUID
+	UserID  pgtype.UUID
+}
+
+// Get the room assigned to a player's guild for an event
+// Used by players to find which room they should join
+func (q *Queries) GetMyAssignedRoom(ctx context.Context, arg GetMyAssignedRoomParams) (Room, error) {
+	row := q.db.QueryRow(ctx, getMyAssignedRoom, arg.EventID, arg.UserID)
+	var i Room
+	err := row.Scan(
+		&i.ID,
+		&i.EventID,
+		&i.Name,
+		&i.Description,
+		&i.CreatedDate,
+	)
+	return i, err
 }
 
 const getPendingEventsForAssignment = `-- name: GetPendingEventsForAssignment :many

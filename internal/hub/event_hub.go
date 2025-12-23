@@ -627,16 +627,73 @@ func (e *EventHub) grantGuildRewards(eventID uuid.UUID) {
 		"top_3_guilds", len(top3GuildIDs))
 }
 
-// buildEventExpiredMessage creates an enhanced EventExpired message with winners and statistics.
-// P2-1: Provides rich information to players about event results
+// buildEventExpiredData creates an EventExpired struct with full leaderboard data.
+// This fetches both user and guild leaderboards so the frontend has immediate access
+// without needing additional API calls after receiving the event.
+func (e *EventHub) buildEventExpiredData(ctx context.Context, eventID uuid.UUID) events.EventExpired {
+	eventExpired := events.EventExpired{
+		EventID:     eventID,
+		CompletedAt: time.Now().UTC(),
+		Message:     "Event has ended",
+	}
+
+	// Fetch user leaderboard
+	userLeaderboard, err := e.queries.GetLeaderboardByEvent(ctx, toPgtypeUUID(eventID))
+	if err != nil {
+		e.logger.Error("Failed to fetch user leaderboard for EventExpired",
+			"event_id", eventID,
+			"error", err)
+	} else {
+		topPlayers := make([]events.TopPlayer, 0, len(userLeaderboard))
+		for _, entry := range userLeaderboard {
+			topPlayers = append(topPlayers, events.TopPlayer{
+				Rank:     int(entry.Rank),
+				UserID:   uuid.UUID(entry.UserID.Bytes),
+				Username: entry.Username,
+				Score:    int(entry.Score),
+			})
+		}
+		eventExpired.TopPlayers = topPlayers
+		e.logger.Info("Added user leaderboard to EventExpired",
+			"event_id", eventID,
+			"player_count", len(topPlayers))
+	}
+
+	// Fetch guild leaderboard
+	guildLeaderboard, err := e.queries.GetGuildLeaderboardByEvent(ctx, toPgtypeUUID(eventID))
+	if err != nil {
+		e.logger.Error("Failed to fetch guild leaderboard for EventExpired",
+			"event_id", eventID,
+			"error", err)
+	} else {
+		topGuilds := make([]events.TopGuild, 0, len(guildLeaderboard))
+		for _, entry := range guildLeaderboard {
+			topGuilds = append(topGuilds, events.TopGuild{
+				Rank:       int(entry.Rank),
+				GuildID:    uuid.UUID(entry.GuildID.Bytes),
+				GuildName:  entry.GuildName,
+				TotalScore: int(entry.TotalScore),
+			})
+		}
+		eventExpired.TopGuilds = topGuilds
+		e.logger.Info("Added guild leaderboard to EventExpired",
+			"event_id", eventID,
+			"guild_count", len(topGuilds))
+	}
+
+	return eventExpired
+}
 
 // publishEventExpiredWithRetry publishes EventExpired message to RabbitMQ with exponential backoff retry.
 // This is a critical operation - if it fails, other instances won't be notified that event ended.
 // P0-2: Retry mechanism for RabbitMQ publish failures
-// P2-1: Enhanced with winners and statistics
 func (e *EventHub) publishEventExpiredWithRetry(ctx context.Context, eventID uuid.UUID) {
+	// Build EventExpired with leaderboard data
+	eventExpiredData := e.buildEventExpiredData(ctx, eventID)
+
 	sseEvent := events.SseEvent{
 		EventType: events.EVENT_EXPIRED,
+		Data:      eventExpiredData,
 	}
 
 	// Marshal payload once (outside retry loop)

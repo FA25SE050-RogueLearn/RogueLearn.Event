@@ -556,6 +556,56 @@ func (hr *HandlerRepo) GetEventRoomsHandler(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+// GetMyAssignedRoomHandler returns the room assigned to the player's guild for an event.
+// This allows players to see only their assigned room instead of all rooms.
+func (hr *HandlerRepo) GetMyAssignedRoomHandler(w http.ResponseWriter, r *http.Request) {
+	eventIDStr := chi.URLParam(r, "event_id")
+	eventID, err := uuid.Parse(eventIDStr)
+	if err != nil {
+		hr.badRequest(w, r, errors.New("invalid event ID format"))
+		return
+	}
+
+	userClaims, err := GetUserClaims(r.Context())
+	if err != nil {
+		hr.logger.Debug("Invalid claims", "err", err)
+		hr.unauthorized(w, r)
+		return
+	}
+
+	userID, err := uuid.Parse(userClaims.Sub)
+	if err != nil {
+		hr.logger.Error("failed to parse user ID from claims", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	room, err := hr.queries.GetMyAssignedRoom(r.Context(), store.GetMyAssignedRoomParams{
+		EventID: toPgtypeUUID(eventID),
+		UserID:  toPgtypeUUID(userID),
+	})
+	if err == pgx.ErrNoRows {
+		hr.logger.Info("no assigned room found for user", "user_id", userID, "event_id", eventID)
+		hr.notFound(w, r)
+		return
+	} else if err != nil {
+		hr.logger.Error("failed to get assigned room", "err", err)
+		hr.serverError(w, r, err)
+		return
+	}
+
+	err = response.JSON(w, response.JSONResponseParameters{
+		Status:  http.StatusOK,
+		Data:    room,
+		Success: true,
+		Msg:     "Assigned room retrieved successfully",
+	})
+
+	if err != nil {
+		hr.serverError(w, r, err)
+	}
+}
+
 type GuildEventRegisterRequest struct {
 	GuildID uuid.UUID
 	EventID uuid.UUID
