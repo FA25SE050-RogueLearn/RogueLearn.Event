@@ -69,7 +69,7 @@ func NewHandlerRepo(ctx context.Context, logger *slog.Logger, db *pgxpool.Pool, 
 	go eventHub.StartInactiveRoomCleanup(ctx, 5*time.Minute, 30*time.Minute)
 
 	// Load event configuration from environment variables
-	assignmentDelaySeconds := env.GetInt("EVENT_ASSIGNMENT_DELAY_SECONDS", 30)
+	assignmentDelaySeconds := env.GetInt("EVENT_ASSIGNMENT_DELAY_SECONDS", 40)
 	logger.Info("Event configuration loaded",
 		"assignment_delay_seconds", assignmentDelaySeconds)
 

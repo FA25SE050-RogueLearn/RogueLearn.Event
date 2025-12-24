@@ -158,7 +158,7 @@ func (e *EventHub) ScheduleEventExpiry(eventID uuid.UUID, endDate time.Time) {
 	// Schedule one-time timer
 	time.AfterFunc(duration, func() {
 		e.logger.Info("Event expiry timer fired", "event_id", eventID)
-		e.completeEventWithGracePeriod(eventID)
+		e.completeEvent(eventID)
 	})
 }
 
@@ -171,27 +171,6 @@ func (e *EventHub) ScheduleEventExpiry(eventID uuid.UUID, endDate time.Time) {
 // - Would otherwise be rejected despite being submitted on time
 //
 // Grace period: 10 seconds (configurable)
-func (e *EventHub) completeEventWithGracePeriod(eventID uuid.UUID) {
-	const gracePeriod = 10 * time.Second
-
-	e.logger.Info("Event expired - starting grace period for in-flight submissions",
-		"event_id", eventID,
-		"grace_period", gracePeriod)
-
-	// Wait for grace period to allow in-flight submissions to complete
-	// During this time:
-	// - New submissions are rejected (event.end_date has passed)
-	// - In-flight submissions continue processing
-	// - Judge responses are still accepted and scored
-	time.Sleep(gracePeriod)
-
-	e.logger.Info("Grace period complete - now completing event",
-		"event_id", eventID,
-		"grace_period", gracePeriod)
-
-	// Now complete the event (with all P0 fixes)
-	e.completeEvent(eventID)
-}
 
 // completeEvent atomically marks an event as completed and broadcasts the expiry message.
 // This should only be called by the timer (ScheduleEventExpiry).
@@ -1337,9 +1316,28 @@ func (e *EventHub) handleEventMessage(eventID uuid.UUID, sseEvent events.SseEven
 					continue
 				}
 
-				// Non-blocking send to room's event channel
+				// Convert sseEvent.Data to EventExpired struct
+				// After JSON unmarshal, Data is map[string]interface{}, need to re-marshal and unmarshal
+				var eventExpiredData events.EventExpired
+				dataBytes, err := json.Marshal(sseEvent.Data)
+				if err != nil {
+					e.logger.Warn("Failed to marshal EventExpired data",
+						"room_id", roomID,
+						"event_id", eventID,
+						"error", err)
+					continue
+				}
+				if err := json.Unmarshal(dataBytes, &eventExpiredData); err != nil {
+					e.logger.Warn("Failed to unmarshal EventExpired data",
+						"room_id", roomID,
+						"event_id", eventID,
+						"error", err)
+					continue
+				}
+
+				// Send to room's Events channel so processEventExpired gets called
 				select {
-				case roomHub.Listerners[roomID] <- sseEvent:
+				case roomHub.Events <- eventExpiredData:
 					affectedRooms++
 				default:
 					e.logger.Warn("Room event channel full, skipping",
@@ -1659,42 +1657,10 @@ func (r *RoomHub) processSolutionResult(event events.SolutionResult) error {
 		return fmt.Errorf("event is not active (status: %s)", eventDetails.Status)
 	}
 
-	// Check 2: Current time must be before end_date
-	// NOTE: This check has a grace period built in:
-	// - Timer fires at end_date
-	// - Waits 10 seconds (grace period) before marking event as 'completed'
-	// - During grace period: status='active' but time > end_date
-	// - In-flight submissions pass Check 1 (status) but may fail Check 2 (time)
-	// - This is intentional: we want to allow submissions that were:
-	//   * Accepted by HTTP handler before end_date
-	//   * Still being judged when timer fired
-	//   * Complete during grace period
-	// - If submission completes >10 seconds after end_date, it's rejected here
-	//
-	// P1-3: Grace period prevents unfair rejection while limiting how late we accept results
-	if time.Now().UTC().After(eventDetails.EndDate.Time.UTC().Add(10 * time.Second)) {
-		r.logger.Warn("Rejecting solution result - grace period expired",
-			"event_id", r.EventID,
-			"end_date", eventDetails.EndDate.Time,
-			"grace_period", 10*time.Second,
-			"current_time", time.Now(),
-			"submission_id", event.SolutionSubmitted.SubmissionID,
-			"player_id", event.SolutionSubmitted.PlayerID,
-			"time_past_deadline", time.Since(eventDetails.EndDate.Time))
-
-		// Update submission status
-		_, updateErr := r.queries.UpdateSubmission(ctx, store.UpdateSubmissionParams{
-			ID:     toPgtypeUUID(event.SolutionSubmitted.SubmissionID),
-			Status: store.SubmissionStatusPending,
-		})
-		if updateErr != nil {
-			r.logger.Error("Failed to update submission status for expired submission",
-				"submission_id", event.SolutionSubmitted.SubmissionID,
-				"error", updateErr)
-		}
-
-		return fmt.Errorf("event has expired at %s (now: %s)", eventDetails.EndDate.Time.UTC(), time.Now().UTC())
-	}
+	// Note: We only check event status (Check 1 above), not time.
+	// If the HTTP handler accepted the submission (before end_date), we process it
+	// regardless of how long the execution takes. The event status check ensures
+	// we don't process results after the event is marked as completed.
 
 	if event.Status != events.Accepted {
 		r.logger.Info("solution failed", "event", event)
